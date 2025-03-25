@@ -50,6 +50,7 @@ parser.add_argument(
     "-m",
     "--model",
     type=str,
+    default="F5TTS_Base",
     help="The model name: F5TTS_v1_Base | F5TTS_Base | E2TTS_Base | etc.",
 )
 parser.add_argument(
