@@ -12,6 +12,16 @@ from f5_tts.infer.utils_infer import (
     save_spectrogram,
 )
 
+import os
+from huggingface_hub import login
+
+# Lấy token từ secrets
+hf_token = os.getenv("f5-tts")
+
+# Login vào Hugging Face
+if hf_token:
+    login(token=hf_token)
+
 def post_process(text):
     text = " " + text + " "
     text = text.replace(" . . ", " . ")
