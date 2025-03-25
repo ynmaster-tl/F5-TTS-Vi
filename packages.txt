@@ -1,5 +1,0 @@
-ffmpeg
-sox
-cmake
-gcc
-g++
