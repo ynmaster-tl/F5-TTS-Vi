@@ -1,6 +1,5 @@
 import spaces
 import os
-os.system("pip install -e.")
 from huggingface_hub import login
 import gradio as gr
 from cached_path import cached_path
