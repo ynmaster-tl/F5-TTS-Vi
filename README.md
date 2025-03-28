@@ -1,6 +1,6 @@
 ---
 title: F5 TTS Vietnamese 100h Demo
-emoji: 🏢
+emoji: 💻
 colorFrom: yellow
 colorTo: blue
 sdk: gradio
