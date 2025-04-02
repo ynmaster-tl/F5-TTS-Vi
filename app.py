@@ -40,7 +40,7 @@ vocoder = load_vocoder()
 model = load_model(
     DiT,
     dict(dim=1024, depth=22, heads=16, ff_mult=2, text_dim=512, conv_layers=4),
-    ckpt_path=str(cached_path("hf://hynt/F5-TTS-Vietnamese-100h/model_480000.pt")),
+    ckpt_path=str(cached_path("hf://hynt/F5-TTS-Vietnamese-100h/model_500000.pt")),
     vocab_file=str(cached_path("hf://hynt/F5-TTS-Vietnamese-100h/vocab.txt")),
 )
 
@@ -71,7 +71,7 @@ def infer_tts(ref_audio_orig: str, gen_text: str, speed: float = 1.0, request: g
 with gr.Blocks(theme=gr.themes.Soft()) as demo:
     gr.Markdown("""
     # 🎤 F5-TTS: Vietnamese Text-to-Speech Synthesis.
-    # The model was trained for 480,000 steps with approximately 150 hours of data on an RTX 3090 GPU. 
+    # The model was trained for 500.000 steps with approximately 150 hours of data on an RTX 3090 GPU. 
     Enter text and upload a sample voice to generate natural speech.
     """)
     
@@ -87,10 +87,10 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
         output_spectrogram = gr.Image(label="📊 Spectrogram")
     
     model_limitations = gr.Textbox(
-        value="""1. The model may not perform well with numerical characters, dates, special characters, etc. => A text normalization module is needed.
+        value="""1. This model may not perform well with numerical characters, dates, special characters, etc. => A text normalization module is needed.
 2. The rhythm of some generated audios may be inconsistent or choppy => It is recommended to select clearly pronounced sample audios with minimal pauses for better synthesis quality.
-3. The reference audio text uses the whisper-large-v3-turbo model, which may not always accurately recognize Vietnamese, resulting in poor voice synthesis quality.
-4. The current model checkpoint is at around step 480,000, trained with 150 hours of public data => Voice cloning for non-native voices may not be perfectly accurate.
+3. Default, reference audio text uses the whisper-large-v3-turbo model, which may not always accurately recognize Vietnamese, resulting in poor voice synthesis quality.
+4. Checkpoint is stopped at step 500.000, trained with 150 hours of public data => Voice cloning for non-native voices may not be perfectly accurate.
 5. Inference with overly long paragraphs may produce poor results.""", 
         label="❗ Model Limitations",
         lines=5,
