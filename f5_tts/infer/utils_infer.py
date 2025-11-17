@@ -31,17 +31,52 @@ from f5_tts.model.utils import (
     convert_char_to_pinyin,
 )
 
+# Global cache for ASR transcriptions
 _ref_audio_cache = {}
 
-device = (
-    "cuda"
-    if torch.cuda.is_available()
-    else "xpu"
-    if torch.xpu.is_available()
-    else "mps"
-    if torch.backends.mps.is_available()
-    else "cpu"
-)
+def choose_device_dynamic(gpu_memory_threshold_gb=2.0, gpu_utilization_threshold=80):
+    """
+    Chọn device động dựa trên load của GPU.
+    Nếu GPU available, kiểm tra memory free và utilization.
+    Nếu memory free < threshold hoặc utilization > threshold, dùng CPU.
+    """
+    if torch.cuda.is_available():
+        try:
+            # Kiểm tra memory free
+            free, total = torch.cuda.mem_get_info()
+            free_gb = free / (1024**3)
+            if free_gb < gpu_memory_threshold_gb:
+                print(f"GPU memory low ({free_gb:.2f}GB free), falling back to CPU")
+                return "cpu"
+            
+            # Nếu có pynvml, kiểm tra utilization
+            try:
+                import pynvml
+                pynvml.nvmlInit()
+                handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+                util = pynvml.nvmlDeviceGetUtilizationRates(handle)
+                if util.gpu > gpu_utilization_threshold:
+                    print(f"GPU utilization high ({util.gpu}%), falling back to CPU")
+                    pynvml.nvmlShutdown()
+                    return "cpu"
+                pynvml.nvmlShutdown()
+            except ImportError:
+                print("pynvml not installed, skipping utilization check")
+            except Exception as e:
+                print(f"Error checking GPU utilization: {e}")
+            
+            return "cuda"
+        except Exception as e:
+            print(f"Error checking GPU memory: {e}, falling back to CPU")
+            return "cpu"
+    elif torch.xpu.is_available():
+        return "xpu"
+    elif torch.backends.mps.is_available():
+        return "mps"
+    else:
+        return "cpu"
+
+device = choose_device_dynamic()
 
 # -----------------------------------------
 
@@ -66,57 +101,100 @@ fix_duration = None
 # chunk text into smaller pieces
 
 
-def chunk_text(text, max_chars=135):
-
-    # print(text)
-
-    # Bước 1: Tách câu theo dấu ". "
-    sentences = [s.strip() for s in text.split('. ') if s.strip()]
+def chunk_text(text: str, max_chars: int = 370, min_chars: int = 40):
+    """
+    Chia nhỏ văn bản dựa trên dấu câu, ưu tiên ngắt thành từng câu riêng biệt.
+    Chỉ ghép câu ngắn (dưới min_chars) với câu tiếp theo nếu kết quả ghép không vượt max_chars.
     
-    # Ghép câu ngắn hơn 4 từ với câu liền kề
-    i = 0
-    while i < len(sentences):
-        if len(sentences[i].split()) < 4:
-            if i == 0 and i + 1 < len(sentences):
-                # Ghép với câu sau
-                sentences[i + 1] = sentences[i] + ', ' + sentences[i + 1]
-                del sentences[i]
-            else:
-                if i - 1 >= 0:
-                    # Ghép với câu trước
-                    sentences[i - 1] = sentences[i - 1] + ', ' + sentences[i]
-                    del sentences[i]
-                    i -= 1
+    Tham số:
+    - text (str): Văn bản đầu vào.
+    - max_chars (int): Chiều dài ký tự tối đa cho mỗi đoạn.
+    - min_chars (int): Chiều dài ký tự tối thiểu cho một đoạn trước khi cố gắng ghép.
+    """
+    
+    # Bước 1: Tách văn bản thành các câu/mệnh đề dựa trên dấu câu mạnh.
+    # [.] [?] [!] [:] [\n] là ranh giới câu.
+    sentences = re.split(r'([.?!:\n])', text)
+    full_sentences = []
+    current_sentence = ""
+
+    for part in sentences:
+        if not part.strip() and part != '\n':
+            continue
+        
+        # Nếu là dấu câu mạnh (kết thúc câu)
+        if re.match(r'[.?!:\n]', part):
+            if current_sentence:
+                current_sentence += part
+                # Làm sạch khoảng trắng dư thừa
+                full_sentences.append(" ".join(current_sentence.strip().split())) 
+            current_sentence = ""
         else:
+            # Nối phần tiếp theo, thêm khoảng trắng nếu cần
+            # Kiểm tra nếu câu hiện tại không kết thúc bằng dấu đóng ngoặc kép/ngăn cách, thêm khoảng trắng.
+            if current_sentence and not current_sentence.endswith(tuple('”)"')) and not current_sentence.endswith(tuple(' \t\n')):
+                current_sentence += " "
+            current_sentence += part.strip()
+            
+    if current_sentence:
+        # Làm sạch khoảng trắng dư thừa
+        full_sentences.append(" ".join(current_sentence.strip().split()))
+    
+    # Nếu không có câu nào, trả về rỗng
+    if not full_sentences:
+        return []
+
+    # --- Bước 2: Ghép các câu nhỏ và Tách các câu quá dài ---
+    final_chunks = []
+    i = 0
+    while i < len(full_sentences):
+        sentence = full_sentences[i]
+        
+        # 1. Xử lý câu quá dài (> max_chars)
+        if len(sentence) > max_chars:
+            
+            # Cắt câu quá dài thành nhiều đoạn, ưu tiên ngắt nghỉ tại dấu câu yếu (nếu có)
+            start = 0
+            while start < len(sentence):
+                segment = sentence[start:start + max_chars]
+                split_point = len(segment) 
+                
+                # Tìm điểm ngắt tốt nhất trong 70 ký tự cuối
+                for j in range(len(segment) - 1, max(0, len(segment) - 70), -1):
+                    char = segment[j]
+                    if char in [',', ';']: # Ưu tiên phẩy, chấm phẩy
+                        split_point = j + 1
+                        break
+                    # Sau đó là khoảng trắng
+                    elif char.isspace() and (len(segment) - j) < 50: 
+                        split_point = j + 1
+                        break
+                    
+                final_chunks.append(segment[:split_point].strip())
+                start += split_point
+            i += 1
+            
+        # 2. Xử lý câu ngắn (< min_chars) và cố gắng ghép
+        elif len(sentence) < min_chars and i < len(full_sentences) - 1:
+            next_sentence = full_sentences[i+1]
+            merged_sentence = sentence + " " + next_sentence
+            
+            # Nếu ghép không vượt quá max_chars
+            if len(merged_sentence) <= max_chars:
+                # Thực hiện ghép và tiếp tục kiểm tra câu ghép này ở vòng lặp sau
+                full_sentences[i+1] = merged_sentence
+                i += 1 
+            else:
+                # Nếu ghép vượt quá max_chars, không ghép (giữ nguyên câu ngắn)
+                final_chunks.append(sentence)
+                i += 1
+            
+        # 3. Câu có độ dài hợp lệ hoặc câu cuối cùng
+        else:
+            final_chunks.append(sentence)
             i += 1
 
-    # print(sentences)
-
-    # Bước 2: Tách phần quá dài trong câu theo dấu ", "
-    final_sentences = []
-    for sentence in sentences:
-        parts = [p.strip() for p in sentence.split(', ')]
-        buffer = []
-        for part in parts:
-            buffer.append(part)
-            total_words = sum(len(p.split()) for p in buffer)
-            if total_words > 20:
-                # Tách câu ra
-                long_part = ', '.join(buffer)
-                final_sentences.append(long_part)
-                buffer = []
-        if buffer:
-            final_sentences.append(', '.join(buffer))
-
-    # print(final_sentences)
-
-    if len(final_sentences[-1].split()) < 4 and len(final_sentences) >= 2:
-        final_sentences[-2] = final_sentences[-2] + ", " + final_sentences[-1]
-        final_sentences = final_sentences[0:-1]
-    
-    # print(final_sentences)
-
-    return final_sentences
+    return final_chunks
 
 
 # load vocoder
@@ -407,6 +485,7 @@ def infer_process(
     speed=speed,
     fix_duration=fix_duration,
     device=device,
+    progress_callback=None,  # <-- thêm dòng này
 ):
     # Split the input text into batches
     audio, sr = torchaudio.load(ref_audio)
@@ -433,6 +512,7 @@ def infer_process(
         speed=speed,
         fix_duration=fix_duration,
         device=device,
+        progress_callback=progress_callback,  # <-- thêm dòng này
     )
 
 
@@ -455,6 +535,7 @@ def infer_batch_process(
     speed=1,
     fix_duration=None,
     device=None,
+    progress_callback=None,  # <-- thêm dòng này
 ):
     audio, sr = ref_audio
     if audio.shape[0] > 1:
@@ -473,8 +554,14 @@ def infer_batch_process(
 
     if len(ref_text[-1].encode("utf-8")) == 1:
         ref_text = ref_text + " "
-    for i, gen_text in enumerate(progress.tqdm(gen_text_batches)):
-        # Prepare the text
+    for i, gen_text in enumerate(gen_text_batches, start=1):
+        # Realtime progress
+        if progress_callback:
+            progress_callback(i, len(gen_text_batches))
+        else:
+            print(f"Processing batch {i}/{len(gen_text_batches)}", end="\r")
+        
+        # Chuẩn bị text
         text_list = [ref_text + gen_text]
         final_text_list = convert_char_to_pinyin(text_list)
 
@@ -514,45 +601,54 @@ def infer_batch_process(
             generated_waves.append(generated_wave)
             spectrograms.append(generated_mel_spec[0].cpu().numpy())
 
-    # Combine all generated waves with cross-fading
-    if cross_fade_duration <= 0:
-        # Simply concatenate
-        final_wave = np.concatenate(generated_waves)
+    # --- START: LOGIC NÂNG CẤP TẠO KHOẢNG LẶNG GIỮA CÁC BATCH ---
+    
+    # Đặt thời gian khoảng lặng mong muốn (0.3 giây)
+    SILENCE_DURATION = 0.25 
+    
+    # Chỉ chèn khoảng lặng nếu có nhiều hơn một batch
+    if len(generated_waves) > 1:
+        # Tần số mẫu được định nghĩa là target_sample_rate (thường là 24000)
+        silence_samples = int(SILENCE_DURATION * target_sample_rate)
+        
+        # Tạo mảng silence (giá trị 0.0)
+        silence_array = np.zeros(silence_samples, dtype=generated_waves[0].dtype)
+        
+        combined_waves = []
+        combined_spectrograms = [] # Cần một mảng spectrograms mới nếu bạn muốn chèn silence vào đây
+        
+        for i in range(len(generated_waves)):
+            # Thêm sóng âm của batch hiện tại
+            combined_waves.append(generated_waves[i])
+            
+            # Thêm spectrogram của batch hiện tại
+            combined_spectrograms.append(spectrograms[i]) 
+            
+            # Chèn silence sau mỗi batch, trừ batch cuối cùng
+            if i < len(generated_waves) - 1:
+                combined_waves.append(silence_array)
+                
+                # CHÚ Ý: Nếu bạn muốn spectrogram khớp với sóng âm,
+                # bạn cũng cần chèn một cột (hoặc nhiều cột) 'silence' vào spectrograms.
+                # Tuy nhiên, việc này phức tạp và thường không cần thiết trừ khi bạn 
+                # hiển thị spectrogram đã kết hợp. Ta sẽ bỏ qua việc chèn silence
+                # vào spectrograms để giữ code đơn giản, và chỉ nối spectrograms.
+
+        # Kết hợp tất cả các sóng âm (bao gồm cả silence)
+        final_wave = np.concatenate(combined_waves)
+        
+        # Kết hợp các spectrogram như ban đầu (không chèn silence vào spectrogram)
+        combined_spectrogram = np.concatenate(combined_spectrograms, axis=1)
+        
     else:
+        # Nếu chỉ có một batch, sử dụng kết quả ban đầu
         final_wave = generated_waves[0]
-        for i in range(1, len(generated_waves)):
-            prev_wave = final_wave
-            next_wave = generated_waves[i]
+        combined_spectrogram = spectrograms[0]
 
-            # Calculate cross-fade samples, ensuring it does not exceed wave lengths
-            cross_fade_samples = int(cross_fade_duration * target_sample_rate)
-            cross_fade_samples = min(cross_fade_samples, len(prev_wave), len(next_wave))
-
-            if cross_fade_samples <= 0:
-                # No overlap possible, concatenate
-                final_wave = np.concatenate([prev_wave, next_wave])
-                continue
-
-            # Overlapping parts
-            prev_overlap = prev_wave[-cross_fade_samples:]
-            next_overlap = next_wave[:cross_fade_samples]
-
-            # Fade out and fade in
-            fade_out = np.linspace(1, 0, cross_fade_samples)
-            fade_in = np.linspace(0, 1, cross_fade_samples)
-
-            # Cross-faded overlap
-            cross_faded_overlap = prev_overlap * fade_out + next_overlap * fade_in
-
-            # Combine
-            new_wave = np.concatenate(
-                [prev_wave[:-cross_fade_samples], cross_faded_overlap, next_wave[cross_fade_samples:]]
-            )
-
-            final_wave = new_wave
-
-    # Create a combined spectrogram
-    combined_spectrogram = np.concatenate(spectrograms, axis=1)
+    # --- END: LOGIC NÂNG CẤP TẠO KHOẢNG LẶNG GIỮA CÁC BATCH ---
+    
+    # ❗️ LƯU Ý: ĐOẠN CODE CROSS-FADING BỊ XÓA BỎ HOÀN TOÀN
+    # vì nó mâu thuẫn với mục tiêu chèn khoảng lặng rõ ràng.
 
     return final_wave, target_sample_rate, combined_spectrogram
 

@@ -123,6 +123,7 @@ class F5TTS:
         file_wave=None,
         file_spect=None,
         seed=-1,
+        progress_callback=None,  # <-- thêm tham số này
     ):
         if seed == -1:
             seed = random.randint(0, sys.maxsize)
@@ -148,6 +149,7 @@ class F5TTS:
             speed=speed,
             fix_duration=fix_duration,
             device=self.device,
+            progress_callback=progress_callback,  # <-- thêm dòng này
         )
 
         if file_wave is not None:

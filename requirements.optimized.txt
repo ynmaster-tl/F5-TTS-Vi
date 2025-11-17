@@ -1,0 +1,43 @@
+# Minimal production requirements for F5-TTS API
+# Removed: gradio, wandb, datasets, matplotlib, jupyter-related packages
+
+# Core TTS dependencies
+soundfile==0.13.1
+transformers==4.40.2
+cached_path
+huggingface_hub
+accelerate>=0.33.0
+
+# Text processing
+vinorm
+jieba
+pypinyin
+
+# Audio processing
+librosa
+pydub
+vocos
+torchdiffeq
+matplotlib
+datasets
+
+# Model utilities
+ema_pytorch>=0.5.2
+safetensors
+x_transformers>=1.31.14
+transformers_stream_generator
+
+# Utilities
+numpy<=1.26.4
+tqdm>=4.65.0
+click
+tomli
+
+# Optional: Remove if not using quantization
+# bitsandbytes>0.37.0
+
+# Server
+Flask==2.3.3
+gunicorn==21.2.0
+requests==2.31.0
+runpod>=1.6.0

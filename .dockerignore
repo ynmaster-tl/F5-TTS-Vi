@@ -1,0 +1,65 @@
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.py[cod]
+*$py.class
+venv/
+env/
+*.egg-info/
+
+# Logs
+*.log
+logs/
+
+# Test files
+test_*.sh
+test_*.py
+
+# Documentation (keep in git, exclude from Docker)
+*.md
+DEPLOYMENT_GUIDE.md
+FIX_GPU_DOCKER_WSL2.md
+KILL_CLEANUP_FIX.md
+OPTIMIZATION_REPORT.md
+QUICK_REFERENCE.txt
+RUNPOD_*.md
+README.md
+
+# Build scripts (not needed in container)
+build-docker.sh
+cleanup-and-build.sh
+push-to-dockerhub.sh
+
+# Output files (will be generated at runtime)
+output/*.wav
+output/*.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Old/unused API files
+flask_tts_api.py
+tts_mix_api.py
+app.py
+
+# Alternative Dockerfiles (only copy the one being used)
+Dockerfile.runpod.pytorch
+Dockerfile.optimized
+
+# RunPod handler (not needed for local/standard deployment)
+runpod_handler.py

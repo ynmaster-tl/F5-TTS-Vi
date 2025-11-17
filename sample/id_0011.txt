@@ -1,0 +1,1 @@
+nếu thêm các hành lang nhỏ vào giữa các ô với điều kiện bernad chỉ có thể di chuyển từ phương án này sang phương án khác theo hàng dọc còn frank chỉ di chuyển theo hàng ngang tương tự như các biểu đồ trước.

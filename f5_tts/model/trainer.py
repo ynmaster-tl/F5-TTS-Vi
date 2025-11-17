@@ -6,7 +6,10 @@ import os
 
 import torch
 import torchaudio
-import wandb
+try:
+    import wandb
+except ImportError:
+    wandb = None
 from accelerate import Accelerator
 from accelerate.utils import DistributedDataParallelKwargs
 from ema_pytorch import EMA
