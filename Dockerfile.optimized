@@ -1,5 +1,6 @@
 # Dockerfile for F5-TTS - OPTIMIZED VERSION (Reduced from 28GB)
 # Multi-stage build to reduce final image size
+# Updated: 2025-11-17 - Fixed healthcheck to use curl
 
 # ========== Stage 1: Builder ==========
 FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04 AS builder
