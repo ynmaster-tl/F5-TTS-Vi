@@ -85,17 +85,19 @@ def handler(event):
                 print(f"[RunPod Handler] Progress: {progress}% - {status}")
                 
                 if progress == 100 and status == "completed":
-                    # Download audio file
+                    # Get filename
                     filename = progress_data.get("filename", f"{job_id}.wav")
-                    audio_resp = requests.get(f"http://localhost:8000/output/{filename}", timeout=30)
                     
-                    if audio_resp.status_code != 200:
-                        raise Exception(f"Failed to download audio: {audio_resp.status_code}")
-                    
-                    # Encode as base64
-                    audio_base64 = base64.b64encode(audio_resp.content).decode('utf-8')
+                    # Generate public URL (RunPod pod URL)
+                    # Format: https://{pod_id}-8000.proxy.runpod.net/output/{filename}
+                    pod_id = os.getenv('RUNPOD_POD_ID', 'localhost')
+                    if pod_id != 'localhost':
+                        download_url = f"https://{pod_id}-8000.proxy.runpod.net/output/{filename}"
+                    else:
+                        download_url = f"http://localhost:8000/output/{filename}"
                     
                     print(f"[RunPod Handler] ✅ Completed in {time.time() - start_time:.2f}s")
+                    print(f"[RunPod Handler] Download URL: {download_url}")
                     
                     # Cleanup progress file
                     try:
@@ -104,9 +106,9 @@ def handler(event):
                         pass
                     
                     # Return result - MUST be flat dict at top level
-                    # RunPod Serverless v2 expects this exact structure
+                    # Return download URL instead of base64 to avoid 400 Bad Request
                     return {
-                        "audio_base64": audio_base64,
+                        "download_url": download_url,
                         "filename": filename,
                         "job_id": job_id,
                         "status": "completed",
