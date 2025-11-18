@@ -1,12 +1,44 @@
-# F5-TTS Vietnamese - Multi-Environment Deployment
+# F5-TTS Vietnamese - Production-Ready Voice Cloning
 
-Production-ready F5-TTS text-to-speech with Vietnamese language support. One codebase, three deployment modes.
+Production-ready F5-TTS text-to-speech with Vietnamese language support optimized for RunPod Serverless deployment.
 
-**Docker Image:** `tlong94/f5-tts-vi:optimized` (27GB)
+**Docker Image:** `tlong94/f5-tts-vi:optimized` (27GB)  
+**RunPod Endpoint:** `vmv08jygfi62i6`  
+**GitHub:** https://github.com/ynmaster-tl/F5-TTS-Vi
 
 ---
 
-## 🎯 Deployment Modes
+## 🎯 Key Features
+
+✅ **RunPod Serverless v2** - Async processing with `/run` and `/status` polling  
+✅ **Vietnamese Voice Cloning** - F5-TTS model trained on 100h ViVoice dataset  
+✅ **Idempotency** - Prevents duplicate processing with in-memory job tracking  
+✅ **Download URL** - Returns public URL for audio download (worker terminates after job)  
+✅ **Health Check** - Curl-based healthcheck for container monitoring  
+✅ **Progress Tracking** - Real-time progress via JSON files  
+✅ **Auto Cleanup** - Progress files deleted after audio download  
+
+---
+
+## 🏗️ Architecture
+
+### RunPod Serverless Flow
+1. **Next.js** submits job to RunPod `/run` endpoint (async)
+2. **RunPod** spawns worker, calls handler with job data
+3. **Handler** polls Flask API for progress every 2 seconds
+4. **Flask API** processes TTS (200-400s for long text)
+5. **Handler** returns `download_url` when complete
+6. **Next.js** polls RunPod `/status` every 1 second
+7. **Next.js** downloads audio before worker terminates (10s idle timeout)
+
+### Components
+- **Flask API** (Port 8000): TTS processing, progress tracking, file serving
+- **RunPod Handler**: Orchestrates Flask API, returns results to RunPod
+- **Next.js Orchestrator**: Job queue management, status polling, audio download
+
+---
+
+## 🚀 Deployment Modes
 
 This project supports **3 deployment modes** with the same codebase:
 
@@ -14,7 +46,7 @@ This project supports **3 deployment modes** with the same codebase:
 |------|------|----------|---------|
 | **Local Test** | 7860 | Quick testing & development | `./start_local.sh` |
 | **Docker** | 8000 | Production on your server | `docker run -p 8000:8000 ...` |
-| **RunPod** | 8000 | Cloud serverless deployment | RunPod Console |
+| **RunPod** | 8000 | Cloud serverless (PRODUCTION) | RunPod Console |
 
 All modes use the same Flask API - just different configurations.
 
@@ -92,23 +124,55 @@ F5_TTS_API_URL=http://localhost:8000
 
 ---
 
-## ☁️ Mode 3: RunPod Serverless
+## ☁️ Mode 3: RunPod Serverless (PRODUCTION)
 
 ### 1. Create Serverless Endpoint
 
 Go to [RunPod Console](https://www.runpod.io/console/serverless) and create endpoint:
 
+**Container Configuration:**
 - **Container Image:** `tlong94/f5-tts-vi:optimized`
-- **GPU:** RTX 3090/4090 (12GB+ VRAM)
-- **Workers:** Min 0, Max 3
-- **Container Disk:** 30GB
+- **GPU:** RTX 3090/4090 (24GB VRAM recommended)
+- **Container Disk:** 30GB minimum
+- **Docker Command:** `python -u runpod_handler_simple.py` (or leave empty - uses CMD from Dockerfile)
 
-### 2. Get Credentials
+**Scaling Configuration:**
+- **Min Workers:** 0 (auto-scale down to save cost)
+- **Max Workers:** 3-5 (based on traffic)
+- **Idle Timeout:** 10 seconds (keep worker alive after job completion for download)
+- **Execution Timeout:** 600 seconds (10 minutes max per job)
+
+**Environment Variables:**
+- None required (all configured in image)
+
+**Network Configuration:**
+- **FlashBoot:** Enabled (faster cold start)
+
+### 2. GitHub Integration (Auto-Deploy)
+
+Connect RunPod to GitHub for automatic rebuilds:
+
+1. Go to Endpoint Settings → GitHub Integration
+2. Connect repository: `https://github.com/ynmaster-tl/F5-TTS-Vi`
+3. Branch: `main`
+4. Auto-deploy on push: **Enabled**
+
+Now any commit to `main` branch will trigger automatic rebuild in RunPod.
+
+### 3. Get Credentials
 
 - **API Key:** Settings → API Keys
-- **Endpoint ID:** Endpoint Overview page
+- **Endpoint ID:** Copy from endpoint overview (e.g., `vmv08jygfi62i6`)
 
-### 3. Test Endpoint
+### 4. Configure Next.js
+
+```bash
+# Edit Starter-Prisma-Pro/.env
+RUNPOD_API_KEY=rpa_YOUR_API_KEY
+RUNPOD_ENDPOINT_ID=your_endpoint_id
+```
+
+### 5. Test Endpoint
 
 ```bash
 export RUNPOD_API_KEY="your_api_key"
@@ -545,17 +609,116 @@ const audioBuffer = Buffer.from(output.audio_base64, 'base64');
 
 ---
 
+## 🎯 Production Best Practices
+
+### RunPod Configuration
+
+**Idle Timeout:** Set to **10 seconds**
+- Keeps worker alive long enough for Next.js to download audio
+- Worker terminates ~5-10s after returning COMPLETED status
+- Must download within this window or get 404
+
+**Polling Interval:** Next.js polls every **1 second**
+- RunPod allows 2000 req/10s for `/status` endpoint
+- Fast polling ensures catching COMPLETED before worker terminates
+- Timeout set to 15s for download to prevent hanging
+
+**Max Concurrent Jobs:** Configure in Admin UI (default: 4)
+- Limits total active jobs (waiting + processing)
+- Prevents overwhelming RunPod with too many workers
+- Jobs queue as `pending` when limit reached
+
+### Status Flow
+
+```
+pending → waiting → processing → completed/failed
+   ↓         ↓          ↓            ↓
+Created   Sent to   RunPod      Download
+          RunPod    accepted    success/error
+```
+
+**Timeout:** 60 minutes per job
+- Jobs stuck in `processing` > 60 min auto-marked `failed`
+- Prevents zombie jobs consuming slots
+
+### Error Handling
+
+**Idempotency:** Handler tracks processed job IDs in memory
+- Prevents duplicate processing if job sent to multiple workers
+- Returns `status: "duplicate"` for already-processed jobs
+
+**Download Fallback:** Handler supports both formats
+- Primary: `download_url` (preferred, smaller response)
+- Fallback: `audio_base64` (if download_url fails)
+
+**Retry Logic:** Failed jobs rollback to `pending`
+- Temporary errors (503, network issues) → Retry
+- Permanent errors (invalid input) → Marked `failed`
+
+### Monitoring
+
+**Health Check:** Every 5 minutes
+```bash
+curl -f http://localhost:8000/health || exit 1
+```
+
+**Logs:** Check RunPod console for:
+- Worker initialization errors
+- Job processing failures  
+- Memory/GPU issues
+
+**Metrics:**
+- Average processing time: 200-400 seconds
+- GPU utilization: 80-95% during processing
+- Memory usage: ~8-10GB per worker
+
+---
+
+## 🐛 Known Issues & Solutions
+
+### Issue: "400 Bad Request" when returning job results
+
+**Cause:** Response too large (base64 audio > 10MB)  
+**Solution:** Switched to `download_url` instead of `audio_base64`
+
+### Issue: One job triggers multiple workers
+
+**Cause:** Race condition with fast polling (1s interval)  
+**Solution:** Atomic lock - mark jobs as `waiting` before sending to RunPod
+
+### Issue: Job marked `failed` but audio exists
+
+**Cause:** Error after successful download overwrites `completed` status  
+**Solution:** Check if job already `completed` before marking `failed`
+
+### Issue: Download fails with 404
+
+**Cause:** Worker terminated before Next.js downloaded audio  
+**Solution:** Increased idle timeout to 10s + faster polling (1s)
+
+---
+
 ## 📝 License
 
 MIT License
 
 ## 🙏 Credits
 
-- F5-TTS: [SWivid/F5-TTS](https://github.com/SWivid/F5-TTS)
-- Vietnamese Model: ViVoice Dataset
-- Platform: [RunPod](https://runpod.io)
+- **F5-TTS:** [SWivid/F5-TTS](https://github.com/SWivid/F5-TTS)
+- **Vietnamese Model:** ViVoice Dataset (100h training data)
+- **Platform:** [RunPod](https://runpod.io) Serverless GPU
+- **Model Weights:** [hynt/F5-TTS-Vietnamese-ViVoice](https://huggingface.co/hynt/F5-TTS-Vietnamese-ViVoice)
 
 ---
 
-**Last Updated:** November 17, 2025  
-**Version:** 1.0.0
+## 📚 Related Projects
+
+- **Next.js Frontend:** [Starter-Prisma-Pro](../Starter-Prisma-Pro)
+- **Docker Hub:** [tlong94/f5-tts-vi](https://hub.docker.com/r/tlong94/f5-tts-vi)
+- **GitHub:** [ynmaster-tl/F5-TTS-Vi](https://github.com/ynmaster-tl/F5-TTS-Vi)
+
+---
+
+**Last Updated:** November 18, 2025  
+**Version:** 2.0.0 - Production Stable  
+**Status:** ✅ Deployed on RunPod Serverless
