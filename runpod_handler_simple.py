@@ -11,6 +11,9 @@ import requests
 import base64
 import runpod
 
+# Track processed jobs (in-memory for this worker)
+processed_jobs = set()
+
 def handler(event):
     """
     RunPod handler - calls Flask API running on localhost:8000
@@ -26,6 +29,15 @@ def handler(event):
         ref_name = input_data.get("ref_name", "sample/main.wav")
         speed = input_data.get("speed", 0.9)
         job_id = input_data.get("job_id", f"runpod_{int(time.time())}")
+        
+        # Idempotency check - if this worker already processed this job, return cached result
+        if job_id in processed_jobs:
+            print(f"[RunPod Handler] ⚠️ Job {job_id} already processed by this worker, skipping")
+            return {
+                "error": "Job already processed by this worker",
+                "status": "duplicate",
+                "job_id": job_id
+            }
         
         if not text:
             return {
@@ -98,6 +110,9 @@ def handler(event):
                     
                     print(f"[RunPod Handler] ✅ Completed in {time.time() - start_time:.2f}s")
                     print(f"[RunPod Handler] Download URL: {download_url}")
+                    
+                    # Mark job as processed
+                    processed_jobs.add(job_id)
                     
                     # Cleanup progress file
                     try:
