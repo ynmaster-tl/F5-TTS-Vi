@@ -2,6 +2,7 @@
 """
 RunPod Handler for F5-TTS - SIMPLIFIED VERSION
 Flask API runs separately, handler just orchestrates
+Updated: 2025-11-18 - Added idempotency and download_url support
 """
 
 import os
