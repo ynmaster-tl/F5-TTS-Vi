@@ -22,13 +22,14 @@ cat << 'EOF'
 │ MODE 2: Docker Production (Port 8000)                        │
 │ Best for: Production on your own server                      │
 ├──────────────────────────────────────────────────────────────┤
-│ Build:  docker build -t f5-tts-api -f Dockerfile.optimized --network=host . │
+│ Build:  docker build -t f5-tts-api:latest -f Dockerfile.optimized --network=host . │
 │ Run:    docker run -d --name f5-tts-api \
-│            --gpus all \
-│            -p 8000:8000 \
-│            -v $(pwd)/sample:/workspace/sample \
-│            -v $(pwd)/output:/workspace/output \
-│            f5-tts-api:latest                                  │  
+            --gpus all \
+            -p 8000:8000 \
+            -v $(pwd)/sample:/workspace/sample \
+            -v $(pwd)/output:/workspace/output \
+            --restart unless-stopped \
+              f5-tts-api:latest                             
 │ Test:   ./test_api.sh 8000                                   │
 │ Config: F5_TTS_API_URL=http://localhost:8000                 │
 └──────────────────────────────────────────────────────────────┘
