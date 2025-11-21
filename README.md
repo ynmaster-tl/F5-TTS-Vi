@@ -369,28 +369,44 @@ curl http://localhost:8000/output/test_123.wav -o output.wav
 ## 📁 Project Structure
 
 ```
-F5-TTS-Vi/
+F5-TTS-Vi-Runpod/
 ├── Dockerfile.optimized          # Production Docker build
 ├── entrypoint.sh                 # Container startup script
 ├── flask_tts_api_optimized.py    # Flask HTTP API server
 ├── runpod_handler_simple.py      # RunPod handler integration
 ├── requirements.optimized.txt    # Python dependencies
+├── Todo_F5_TTS_Runpod.md         # Development roadmap
 ├── f5_tts/                       # F5-TTS source code
-│   ├── model/                    # Model architecture
-│   └── infer/                    # Inference code
-└── sample/                       # Voice sample files
-    ├── main.wav
-    ├── female.wav
-    └── male.wav
+│   ├── api.py                    # Main F5-TTS inference API
+│   ├── socket_server.py         # Real-time streaming TTS server
+│   ├── eval/                     # Model evaluation scripts
+│   ├── infer/                    # Inference utilities and examples
+│   └── model/                    # Core model architecture (DiT, UNetT, CFM)
+├── sample/                       # Voice reference samples
+│   ├── 1_Nam_v1.1.wav           # Male voice v1.1 (improved quality)
+│   ├── 3_Nam.wav                # Male voice 3
+│   ├── 3_Nu.wav                 # Female voice 3
+│   ├── 4_Nam_speed_1.1.wav      # Male voice 4 with speed adjustment
+│   ├── 4_Nu_speed_1.wav         # Female voice 4 with speed adjustment
+│   ├── 5_Nam_speed_1.wav        # Male voice 5 with speed adjustment
+│   ├── Lat_Radio_v1.1.wav       # Radio-style voice v1.1
+│   └── Ta_Hoi_Audio_v1.1.wav    # Conversational voice v1.1
+└── output/                      # Generated audio files and progress tracking
 ```
 
-### File Descriptions
+### Voice Samples Description
 
-- **Dockerfile.optimized**: Multi-stage Docker build, optimized for size (27GB)
-- **entrypoint.sh**: Starts Flask API, then RunPod handler
-- **flask_tts_api_optimized.py**: HTTP server with endpoints: `/tts`, `/tts/progress/{id}`, `/output/{file}`, `/health`
-- **runpod_handler_simple.py**: Orchestrates jobs between RunPod and Flask API
-- **requirements.optimized.txt**: Minimal production dependencies
+**Available Voice References:**
+- `1_Nam_v1.1`: Nam giọng nam nâng cấp (improved male voice)
+- `3_Nam`: Nam giọng nam cơ bản (basic male voice)
+- `3_Nu`: Nữ giọng nữ cơ bản (basic female voice)
+- `4_Nam_speed_1.1`: Nam giọng nam với điều chỉnh tốc độ (male voice with speed tuning)
+- `4_Nu_speed_1`: Nữ giọng nữ với điều chỉnh tốc độ (female voice with speed tuning)
+- `5_Nam_speed_1`: Nam giọng nam tốc độ (male voice optimized for speed)
+- `Lat_Radio_v1.1`: Giọng phát thanh radio nâng cấp (improved radio announcer voice)
+- `Ta_Hoi_Audio_v1.1`: Giọng hội thoại nâng cấp (improved conversational voice)
+
+**Usage:** Use the filename (without .wav extension) as the `ref_name` parameter in API calls.
 
 ---
 

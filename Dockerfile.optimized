@@ -1,0 +1,85 @@
+# Dockerfile for F5-TTS - OPTIMIZED VERSION (Reduced from 28GB)
+# Multi-stage build to reduce final image size
+# Updated: 2025-11-17 - Fixed healthcheck to use curl
+
+# ========== Stage 1: Builder ==========
+FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    python3-dev \
+    git \
+    wget \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy and install Python packages
+COPY requirements.optimized.txt /app/
+RUN pip3 install --no-cache-dir --upgrade pip && \
+    pip3 install --no-cache-dir \
+    torch==2.4.1 torchvision==0.19.1 torchaudio==2.4.1 --index-url https://download.pytorch.org/whl/cu118 && \
+    pip3 install --no-cache-dir -r requirements.optimized.txt && \
+    pip3 install --no-cache-dir flask gunicorn psutil
+
+# Download models (cache in builder stage)
+RUN python3 -c "from cached_path import cached_path; \
+    cached_path('hf://hynt/F5-TTS-Vietnamese-ViVoice/model_last.pt'); \
+    cached_path('hf://hynt/F5-TTS-Vietnamese-ViVoice/config.json'); \
+    print('✅ Models cached')"
+
+# ========== Stage 2: Runtime (smaller) ==========
+FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV FLASK_APP=flask_tts_api_optimized.py
+ENV FLASK_HOST=0.0.0.0
+ENV FLASK_PORT=8000
+
+# Install ONLY runtime dependencies (no build tools)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    ffmpeg \
+    libsndfile1 \
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+WORKDIR /app
+
+# Copy Python packages from builder
+COPY --from=builder /usr/local/lib/python3.10/dist-packages /usr/local/lib/python3.10/dist-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+# Copy HuggingFace cache (models) from builder
+COPY --from=builder /root/.cache/huggingface /root/.cache/huggingface
+
+# Copy application code
+COPY flask_tts_api_optimized.py /app/
+COPY runpod_handler_simple.py /app/
+COPY entrypoint.sh /app/
+COPY f5_tts/ /app/f5_tts/
+COPY sample/ /app/sample/
+
+# Create output directory
+RUN mkdir -p /app/output
+
+# Set permissions
+RUN chmod +x /app/*.py /app/entrypoint.sh
+
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5m --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Start both Flask and RunPod handler via entrypoint script
+CMD ["/app/entrypoint.sh"]
