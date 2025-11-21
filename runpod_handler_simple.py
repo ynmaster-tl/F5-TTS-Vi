@@ -180,25 +180,43 @@ if __name__ == "__main__":
     except:
         print("[RunPod Handler] 🔄 Flask API not running, starting it...")
         import subprocess
+        import os
+        
+        # Pass environment variables to Flask subprocess
+        env = os.environ.copy()
+        env['FLASK_HOST'] = '0.0.0.0'
+        env['FLASK_PORT'] = '8000'
+        
         flask_process = subprocess.Popen(
             ["python3", "flask_tts_api_optimized.py"],
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
+            stderr=subprocess.PIPE,
+            env=env
         )
         flask_started = True
 
-        # Wait for Flask to be ready
-        for i in range(30):
+        # Wait for Flask to be ready (increased timeout for model loading)
+        for i in range(60):  # 60 attempts = 60 seconds
             try:
                 resp = requests.get("http://localhost:8000/health", timeout=2)
                 if resp.status_code == 200:
                     print("[RunPod Handler] ✅ Flask API started successfully")
                     break
             except:
+                # Check if Flask process is still alive
+                if flask_process.poll() is not None:
+                    print("[RunPod Handler] ❌ Flask process died")
+                    stdout, stderr = flask_process.communicate()
+                    print(f"[RunPod Handler] Flask stdout: {stdout.decode()}")
+                    print(f"[RunPod Handler] Flask stderr: {stderr.decode()}")
+                    exit(1)
                 time.sleep(1)
         else:
-            print("[RunPod Handler] ❌ Failed to start Flask API")
+            print("[RunPod Handler] ❌ Failed to start Flask API after 60 seconds")
             flask_process.terminate()
+            stdout, stderr = flask_process.communicate()
+            print(f"[RunPod Handler] Flask stdout: {stdout.decode()}")
+            print(f"[RunPod Handler] Flask stderr: {stderr.decode()}")
             exit(1)
 
     print("[RunPod Handler] Starting RunPod serverless handler...")
