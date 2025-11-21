@@ -448,46 +448,56 @@ def synthesize():
     
     # Parse parameters
     text = (payload or {}).get("text", "")
-    ref_name = (payload or {}).get("ref_name", "")
+    ref_name_raw = (payload or {}).get("ref_name", "") # Get the raw input
     speed = (payload or {}).get("speed", 0.9)
     custom_job_id = (payload or {}).get("job_id")
     
     # Validation
     if not text.strip():
         return jsonify({"error": "missing_text"}), 400
-    if not ref_name.strip():
+    if not ref_name_raw.strip():
         return jsonify({"error": "missing_ref_name"}), 400
+
+    # --- Robust ref_name cleanup logic ---
+    # 1. Start with the raw name, stripped of whitespace
+    cleaned_name = ref_name_raw.strip()
+
+    # 2. Remove "voice:" prefix if it exists (case-insensitive)
+    if cleaned_name.lower().startswith('voice:'):
+        cleaned_name = cleaned_name[6:] # Remove 'voice:' (6 chars)
+
+    # 3. Ensure it ends with .wav (case-insensitive)
+    if not cleaned_name.lower().endswith('.wav'):
+        cleaned_name = f"{cleaned_name}.wav"
     
-    # Validate ref file exists
-    # Handle paths like "sample/narrator.wav" or just "narrator.wav"
-    ref_path = Path(ref_name)
-    if ref_path.parent != Path('.'):
-        # Has folder prefix like "sample/narrator.wav"
-        ref_base = secure_filename(ref_path.stem)
-        wav_path = BASE_DIR / ref_path.parent / f"{ref_base}.wav"
-    else:
-        # Just filename like "narrator.wav"
-        ref_base = secure_filename(ref_path.stem)
-        wav_path = SAMPLE_DIR / f"{ref_base}.wav"
+    # --- Securely build the file path ---
+    # Do NOT use secure_filename on the whole path, as it strips dots and slashes.
+    # Instead, we build a safe path inside our designated SAMPLE_DIR.
+    # This prevents path traversal attacks (e.g., ref_name = "../../../../etc/passwd")
+    # by ensuring the final path is always within SAMPLE_DIR.
+    wav_path = SAMPLE_DIR.joinpath(cleaned_name).resolve()
     
+    # Security check: Ensure the resolved path is still within SAMPLE_DIR
+    if not str(wav_path).startswith(str(SAMPLE_DIR.resolve())):
+        return jsonify({
+            "error": "path_traversal_attempt",
+            "message": "Invalid ref_name.",
+        }), 400
+
+    # --- Check for file existence ---
     if not wav_path.exists():
         return jsonify({
             "error": "ref_not_found",
             "message": "Reference voice file not found for the given 'ref_name'.",
             "details": {
-                "original_ref_name": ref_name,
-                "sanitized_base_name": ref_base,
+                "original_ref_name": ref_name_raw,
+                "cleaned_ref_name": cleaned_name,
                 "full_path_checked": str(wav_path)
             }
         }), 404
     
-    # Validate speed
-    try:
-        speed = float(speed)
-        if speed <= 0 or speed > 4:
-            raise ValueError
-    except Exception:
-        return jsonify({"error": "invalid_speed"}), 400
+    # Use the file stem (name without extension) for get_text_ref
+    ref_base = wav_path.stem
     
     # Try to acquire job lock (non-blocking)
     if not job_lock.acquire(blocking=False):
@@ -501,7 +511,7 @@ def synthesize():
     try:
         # Get text reference
         update_progress("temp", 2, "getting_text_ref")
-        text_ref = get_text_ref(wav_path.stem)
+        text_ref = get_text_ref(ref_base)
         
         # Clean text
         try:
