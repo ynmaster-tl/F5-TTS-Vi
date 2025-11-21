@@ -458,7 +458,7 @@ def synthesize():
     if not ref_name.strip():
         return jsonify({"error": "missing_ref_name"}), 400
     
-    # Validate ref file exists
+    # Validate ref file exists - with fuzzy matching
     # Handle paths like "sample/narrator.wav" or just "narrator.wav"
     ref_path = Path(ref_name)
     if ref_path.parent != Path('.'):
@@ -470,8 +470,21 @@ def synthesize():
         ref_base = secure_filename(ref_path.stem)
         wav_path = SAMPLE_DIR / f"{ref_base}.wav"
     
+    # If exact match not found, try fuzzy matching (find file starting with ref_base)
     if not wav_path.exists():
-        return jsonify({"error": "ref_not_found", "message": f"{wav_path} not found"}), 404
+        print(f"[TTS] Exact match not found: {wav_path}")
+        print(f"[TTS] Trying fuzzy match for: {ref_base}")
+        
+        # Find all .wav files that start with ref_base
+        matching_files = list(SAMPLE_DIR.glob(f"{ref_base}*.wav"))
+        if matching_files:
+            # Use the first match (should be the most recent version)
+            wav_path = matching_files[0]
+            print(f"[TTS] Found fuzzy match: {wav_path}")
+        else:
+            return jsonify({"error": "ref_not_found", "message": f"No file found for '{ref_name}' (tried exact: {wav_path}, fuzzy: {ref_base}*.wav)"}), 404
+    
+    print(f"[TTS] Using voice file: {wav_path}")
     
     # Validate speed
     try:

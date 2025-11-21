@@ -90,8 +90,11 @@ def handler(event):
             }
         
         if response.status_code != 202:
+            error_details = response.text
+            print(f"[RunPod Handler] ❌ Flask API returned non-202 status: {response.status_code}")
+            print(f"[RunPod Handler] ❌ Error details: {error_details}")
             return {
-                "error": f"Flask API error: {response.text}",
+                "error": f"Flask API error: {error_details}",
                 "status_code": response.status_code,
                 "status": "failed",
                 "job_id": job_id
