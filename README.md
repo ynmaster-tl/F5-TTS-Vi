@@ -1,201 +1,207 @@
-# F5-TTS Vietnamese - Production-Ready Voice Cloning
+# F5-TTS-Vi-Runpod: Hệ thống TTS Tiếng Việt Sẵn sàng Sản xuất
 
-Production-ready F5-TTS text-to-speech with Vietnamese language support optimized for RunPod Serverless deployment.
+## 📖 Tổng quan Dự án
 
-**Docker Image:** `tlong94/f5-tts-vi:optimized` (27GB)  
-**RunPod Endpoint:** `vmv08jygfi62i6`  
-**GitHub:** https://github.com/ynmaster-tl/F5-TTS-Vi
+**F5-TTS-Vi-Runpod** là một hệ thống Text-to-Speech (TTS) tiếng Việt sẵn sàng sản xuất, được tối ưu hóa đặc biệt cho việc triển khai trên nền tảng RunPod Serverless. Dự án sử dụng mô hình F5-TTS tiên tiến để tạo ra âm thanh giọng nói tự nhiên từ văn bản tiếng Việt, với khả năng nhân bản giọng nói (voice cloning) dựa trên các mẫu âm thanh tham chiếu.
 
----
+### 🎯 Mục đích
+- Triển khai mô hình F5-TTS thành dịch vụ TTS đám mây có thể mở rộng cho tiếng Việt.
+- Giải quyết các thách thức triển khai thực tế như quản lý tài nguyên GPU, xử lý bất đồng bộ và theo dõi tiến độ thời gian thực.
+- Hỗ trợ các ứng dụng cần tạo âm thanh giọng nói tiếng Việt quy mô lớn, thời gian thực trên nền tảng serverless.  
 
-## 🎯 Key Features
+## 🏗️ Cấu trúc Dự án
 
-✅ **RunPod Serverless v2** - Async processing with `/run` and `/status` polling  
-✅ **Vietnamese Voice Cloning** - F5-TTS model trained on 100h ViVoice dataset  
-✅ **Idempotency** - Prevents duplicate processing with in-memory job tracking  
-✅ **Download URL** - Returns public URL for audio download (worker terminates after job)  
-✅ **Health Check** - Curl-based healthcheck for container monitoring  
-✅ **Progress Tracking** - Real-time progress via JSON files  
-✅ **Auto Cleanup** - Progress files deleted after audio download  
+### Thư mục Gốc
+- `README.md`: Tài liệu này (đang cập nhật).
+- `runpod_handler_simple.py`: Bộ xử lý chính cho RunPod, điều phối các công việc.
+- `flask_tts_api_optimized.py`: Máy chủ API Flask chính, xử lý logic TTS.
+- `Dockerfile.optimized`: Cấu hình Docker tối ưu cho sản xuất.
+- `entrypoint.sh`: Script khởi động container.
+- `requirements.optimized.txt`: Các phụ thuộc Python tối thiểu.
+- `Todo_F5_TTS_Runpod.md`: Danh sách các cải tiến cần thực hiện.
 
----
+### Thư mục f5_tts/ (Mô-đun Cốt lõi)
+- `api.py`: API suy luận mô hình F5-TTS chính.
+- `socket_server.py`: Máy chủ streaming TTS thời gian thực qua socket.
+- `eval/`: Scripts đánh giá hiệu suất mô hình.
+- `infer/`: Tiện ích suy luận và các ví dụ sử dụng.
+- `model/`: Kiến trúc mô hình cốt lõi (DiT, UNetT, CFM, v.v.).
 
-## 🏗️ Architecture
+### Thư mục Dữ liệu
+- `sample/`: Mẫu giọng nói tham chiếu (file .wav với transcript .txt tương ứng).
+- `output/`: File âm thanh được tạo và file JSON theo dõi tiến độ.
 
-### RunPod Serverless Flow
-1. **Next.js** submits job to RunPod `/run` endpoint (async)
-2. **RunPod** spawns worker, calls handler with job data
-3. **Handler** polls Flask API for progress every 2 seconds
-4. **Flask API** processes TTS (200-400s for long text)
-5. **Handler** returns `download_url` when complete
-6. **Next.js** polls RunPod `/status` every 1 second
-7. **Next.js** downloads audio before worker terminates (10s idle timeout)
+## ⚙️ Các Thành phần và Chức năng Chính
 
-### Components
-- **Flask API** (Port 8000): TTS processing, progress tracking, file serving
-- **RunPod Handler**: Orchestrates Flask API, returns results to RunPod
-- **Next.js Orchestrator**: Job queue management, status polling, audio download
+### 1. Máy chủ API Flask (`flask_tts_api_optimized.py`)
+- **Xử lý Công việc Đơn**: Đảm bảo chỉ một công việc TTS được xử lý tại một thời điểm để tránh xung đột tài nguyên GPU.
+- **Xử lý Bất đồng bộ**: Thực thi công việc không chặn với theo dõi tiến độ thời gian thực.
+- **Quản lý Bộ nhớ GPU**: Tự động dọn dẹp và tối ưu hóa bộ nhớ.
+- **Tích hợp PhoWhisper**: Tự động chuyển đổi văn bản từ âm thanh tham chiếu bằng mô hình PhoWhisper.
+- **Endpoints chính**:
+  - `/health`: Kiểm tra sức khỏe hệ thống.
+  - `/status`: Trạng thái máy chủ và thông tin GPU.
+  - `/voices`: Liệt kê các mẫu giọng nói khả dụng.
+  - `/tts`: Tạo TTS chính (bất đồng bộ).
+  - `/tts/progress/<job_id>`: Theo dõi tiến độ công việc.
+  - `/tts/kill/<job_id>`: Hủy công việc đang chạy.
+  - `/output/<filename>`: Tải file âm thanh đã tạo.
+  - `/cleanup`: Dọn dẹp bộ nhớ GPU thủ công.
 
----
+### 2. Bộ xử lý RunPod (`runpod_handler_simple.py`)
+- **Điều phối Công việc**: Nhận yêu cầu từ RunPod và chuyển tiếp đến Flask API.
+- **Theo dõi Tiến độ**: Polling Flask API để cập nhật trạng thái công việc.
+- **Trả về Kết quả**: Trả về URL tải xuống âm thanh khi hoàn thành.
+- **Xử lý Lỗi**: Quản lý các trường hợp lỗi và timeout.
 
-## 🚀 Deployment Modes
+### 3. Mô hình F5-TTS (`f5_tts/api.py`)
+- **Loại Mô hình**: F5-TTS (dựa trên DiT) và E2-TTS (dựa trên UNetT).
+- **Hỗ trợ Vocoder**: Vocos và BigVGAN để chuyển đổi spectrogram thành âm thanh.
+- **Phát hiện Thiết bị**: Tự động chọn GPU/CPU phù hợp.
+- **Xử lý Batch**: Suy luận hiệu quả với callback tiến độ.
+- **Xử lý Văn bản**: Chuẩn hóa và làm sạch văn bản tiếng Việt.
 
-This project supports **3 deployment modes** with the same codebase:
+### 4. Máy chủ Socket (`f5_tts/socket_server.py`)
+- **Streaming Thời gian thực**: Tạo và truyền âm thanh theo chunk.
+- **Tích hợp Client**: Hỗ trợ client tùy chỉnh cho TTS trực tiếp.
 
-| Mode | Port | Use Case | Command |
-|------|------|----------|---------|
-| **Local Test** | 7860 | Quick testing & development | `./start_local.sh` |
-| **Docker** | 8000 | Production on your server | `docker run -p 8000:8000 ...` |
-| **RunPod** | 8000 | Cloud serverless (PRODUCTION) | RunPod Console |
+### 5. Cấu hình Đào tạo
+- **Biến thể Mô hình**: Phiên bản Base và Small cho các yêu cầu tài nguyên khác nhau.
+- **Hỗ trợ Dataset**: Dataset tiếng Việt (ViVoice 100h) và đa ngôn ngữ.
+- **Tối ưu hóa**: Tích lũy gradient, lập lịch warmup và độ chính xác hỗn hợp.
 
-All modes use the same Flask API - just different configurations.
+## 🚀 Cách Hệ thống Hoạt động
 
----
+### Luồng Triển khai trên RunPod
+1. **Client (Next.js)** gửi yêu cầu công việc đến endpoint `/run` của RunPod (bất đồng bộ).
+2. **RunPod** tạo worker và gọi handler với dữ liệu công việc.
+3. **Handler** polling Flask API để theo dõi tiến độ mỗi 2 giây.
+4. **Flask API** xử lý TTS (có thể mất 200-400 giây cho văn bản dài).
+5. **Handler** trả về `download_url` khi hoàn thành.
+6. **Client** polling `/status` của RunPod mỗi 1 giây.
+7. **Client** tải âm thanh trước khi worker tắt (timeout idle 10 giây).
 
-## 🚀 Mode 1: Local Testing (Port 7860)
+### Quy trình Tạo TTS
+1. **Xác thực đầu vào**: Kiểm tra văn bản và file giọng nói tham chiếu.
+2. **Tạo văn bản tham chiếu**: Sử dụng PhoWhisper để tạo transcript nếu chưa có.
+3. **Làm sạch văn bản**: Chuẩn hóa tiếng Việt với Vinorm.
+4. **Suy luận mô hình**: F5-TTS tạo mel spectrograms từ văn bản.
+5. **Vocoder**: Chuyển spectrograms thành sóng âm thanh.
+6. **Hậu xử lý**: Dọn dẹp âm thanh và lưu file.
 
-### Quick Start
+### Tính năng Serverless
+- Khởi động lạnh: 30-60 giây cho lần yêu cầu đầu tiên.
+- Xử lý ấm: 3-5 giây cho các yêu cầu tiếp theo.
+- Bộ nhớ GPU: ~10GB VRAM sử dụng.
+- Công việc đồng thời: 1 công việc mỗi worker (giới hạn GPU).
 
+## 🔧 Cài đặt và Triển khai
+
+### Yêu cầu Hệ thống
+- Python 3.10+
+- Docker và Docker Compose
+- GPU NVIDIA (khuyến nghị RTX 3090/4090 với 24GB VRAM)
+- CUDA 11.8+
+
+### Cài đặt Phụ thuộc
 ```bash
-cd /home/dtlong/F5-TTS-Vi
+pip install -r requirements.optimized.txt
+```
 
-# Start Flask API on port 7860
+### Triển khai Local (Chế độ Kiểm tra)
+```bash
+cd /home/dtlong/F5-TTS-Vi-Runpod
+
+# Khởi động Flask API trên port 7860
+python3 flask_tts_api_optimized.py
+
+# Hoặc sử dụng script
 ./start_local.sh
-
-# Or manually:
-conda activate F5-TTS-Vi-100h
-FLASK_PORT=7860 python flask_tts_api_optimized.py
 ```
 
-### Test API
-
+### Triển khai Docker (Sản xuất)
 ```bash
-# Test with sample request
-./test_api.sh 7860
+cd /home/dtlong/F5-TTS-Vi-Runpod
 
-# Or manual curl:
-curl http://localhost:7860/health
-```
+# Xây dựng image
+docker build -f Dockerfile.optimized -t f5-tts-vi-runpod:latest .
 
-### Update Next.js Config
-
-```bash
-# Edit Starter-Prisma-Pro/.env
-F5_TTS_API_URL=http://localhost:7860
-```
-
----
-
-## 🐳 Mode 2: Docker Production (Port 8000)
-
-### Build & Run
-
-```bash
-cd /home/dtlong/F5-TTS-Vi
-
-# Build image
-docker build -t f5-tts-local:latest -f Dockerfile.optimized .
-
-# Run with GPU
+# Chạy với GPU
 docker run -d \
-  --name f5-tts-api \
+  --name f5-tts-runpod \
   --gpus all \
   -p 8000:8000 \
   -v $(pwd)/sample:/app/sample \
   -v $(pwd)/output:/app/output \
-  f5-tts-local:latest
-
-# Check logs
-docker logs -f f5-tts-api
+  f5-tts-vi-runpod:latest
 ```
 
-### Test API
+### Triển khai RunPod Serverless (Sản xuất)
+1. **Tạo Endpoint Serverless** trên [RunPod Console](https://www.runpod.io/console/serverless):
+   - **Container Image:** `tlong94/f5-tts-vi:optimized`
+   - **GPU:** RTX 3090/4090 (24GB VRAM khuyến nghị)
+   - **Container Disk:** 30GB tối thiểu
+   - **Docker Command:** `python -u runpod_handler_simple.py`
 
+2. **Cấu hình Scaling:**
+   - **Min Workers:** 0 (tự động tắt để tiết kiệm chi phí)
+   - **Max Workers:** 3-5 (tùy lưu lượng)
+   - **Idle Timeout:** 10 giây
+   - **Execution Timeout:** 600 giây
+
+3. **Kết nối GitHub** để tự động rebuild khi push code.
+
+## 📖 Sử dụng
+
+### API Endpoints
+- **POST /tts**: Gửi yêu cầu TTS
+  ```json
+  {
+    "text": "Xin chào thế giới",
+    "ref_name": "sample/3_Nu.wav",
+    "speed": 0.9,
+    "job_id": "unique_job_id"
+  }
+  ```
+- **GET /tts/progress/{job_id}**: Kiểm tra tiến độ
+- **GET /output/{filename}**: Tải âm thanh đã tạo
+
+### Ví dụ Kiểm tra
 ```bash
-./test_api.sh 8000
+# Gửi yêu cầu TTS
+curl -X POST http://localhost:8000/tts \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "Xin chào, đây là bản kiểm tra hệ thống F5-TTS tiếng Việt.",
+    "ref_name": "3_Nu.wav",
+    "speed": 0.8,
+    "job_id": "test_job_001"
+  }'
+
+# Kiểm tra tiến độ
+curl http://localhost:8000/tts/progress/test_job_001
+
+# Tải âm thanh khi hoàn thành
+curl -O http://localhost:8000/output/f5tts_20251121_120000_abc123.wav
 ```
 
-### Update Next.js Config
-
+### Sử dụng với RunPod
 ```bash
-# Edit Starter-Prisma-Pro/.env
-F5_TTS_API_URL=http://localhost:8000
-```
-
----
-
-## ☁️ Mode 3: RunPod Serverless (PRODUCTION)
-
-### 1. Create Serverless Endpoint
-
-Go to [RunPod Console](https://www.runpod.io/console/serverless) and create endpoint:
-
-**Container Configuration:**
-- **Container Image:** `tlong94/f5-tts-vi:optimized`
-- **GPU:** RTX 3090/4090 (24GB VRAM recommended)
-- **Container Disk:** 30GB minimum
-- **Docker Command:** `python -u runpod_handler_simple.py` (or leave empty - uses CMD from Dockerfile)
-
-**Scaling Configuration:**
-- **Min Workers:** 0 (auto-scale down to save cost)
-- **Max Workers:** 3-5 (based on traffic)
-- **Idle Timeout:** 10 seconds (keep worker alive after job completion for download)
-- **Execution Timeout:** 600 seconds (10 minutes max per job)
-
-**Environment Variables:**
-- None required (all configured in image)
-
-**Network Configuration:**
-- **FlashBoot:** Enabled (faster cold start)
-
-### 2. GitHub Integration (Auto-Deploy)
-
-Connect RunPod to GitHub for automatic rebuilds:
-
-1. Go to Endpoint Settings → GitHub Integration
-2. Connect repository: `https://github.com/ynmaster-tl/F5-TTS-Vi`
-3. Branch: `main`
-4. Auto-deploy on push: **Enabled**
-
-Now any commit to `main` branch will trigger automatic rebuild in RunPod.
-
-### 3. Get Credentials
-
-- **API Key:** Settings → API Keys
-- **Endpoint ID:** Copy from endpoint overview (e.g., `vmv08jygfi62i6`)
-
-### 4. Configure Next.js
-
-```bash
-# Edit Starter-Prisma-Pro/.env
-RUNPOD_API_KEY=rpa_YOUR_API_KEY
-RUNPOD_ENDPOINT_ID=your_endpoint_id
-```
-
-### 5. Test Endpoint
-
-```bash
-export RUNPOD_API_KEY="your_api_key"
-export ENDPOINT_ID="your_endpoint_id"
-
-curl -X POST https://api.runpod.ai/v2/$ENDPOINT_ID/run \
-  -H "Authorization: Bearer $RUNPOD_API_KEY" \
+# Gửi yêu cầu đến RunPod endpoint
+curl -X POST https://api.runpod.ai/v2/YOUR_ENDPOINT_ID/run \
+  -H "Authorization: Bearer YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "input": {
       "text": "Xin chào Việt Nam",
-      "ref_name": "main.wav",
+      "ref_name": "3_Nu.wav",
       "speed": 0.9
     }
   }'
-```
 
-### 4. Check Job Status
-
-```bash
-# Get job ID from step 3 response
-curl https://api.runpod.ai/v2/$ENDPOINT_ID/status/YOUR_JOB_ID \
-  -H "Authorization: Bearer $RUNPOD_API_KEY"
+# Kiểm tra trạng thái
+curl https://api.runpod.ai/v2/YOUR_ENDPOINT_ID/status/JOB_ID \
+  -H "Authorization: Bearer YOUR_API_KEY"
 ```
 
 ---
@@ -719,6 +725,25 @@ MIT License
 
 ---
 
-**Last Updated:** November 18, 2025  
-**Version:** 2.0.0 - Production Stable  
-**Status:** ✅ Deployed on RunPod Serverless
+## ⚙️ Cấu hình và Biến Môi trường
+
+### Biến Môi trường Container
+- `FLASK_HOST`, `FLASK_PORT`: Cấu hình máy chủ Flask (mặc định: 0.0.0.0:8000)
+- `REF_VOICE_DIR`: Thư mục chứa mẫu giọng nói (mặc định: ./sample)
+- `OUTPUT_AUDIO_DIR`: Thư mục lưu âm thanh đầu ra (mặc định: ./output)
+
+### Cấu hình Mô hình
+- **Checkpoint**: `hynt/F5-TTS-Vietnamese-ViVoice` (model_last.pt)
+- **Vocoder**: Vocos (mặc định)
+- **Tốc độ mẫu**: 24kHz
+- **Thiết bị**: CUDA (tự động phát hiện GPU)
+
+### Cấu hình RunPod
+- **RUNPOD_POD_ID**: ID của pod RunPod (tự động)
+- **RUNPOD_ENDPOINT_ID**: ID endpoint serverless
+
+---
+
+**Cập nhật lần cuối:** Tháng 11, 2025  
+**Phiên bản:** 2.0.0 - Sẵn sàng sản xuất  
+**Trạng thái:** ✅ Đã triển khai trên RunPod Serverless
