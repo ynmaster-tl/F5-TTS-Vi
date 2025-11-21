@@ -168,20 +168,48 @@ if __name__ == "__main__":
     print("[RunPod Handler] ========================================")
     print("[RunPod Handler] F5-TTS RunPod Serverless Handler")
     print("[RunPod Handler] ========================================")
-    
-    # Check if Flask is running
-    for i in range(30):
-        try:
-            resp = requests.get("http://localhost:8000/health", timeout=2)
-            if resp.status_code == 200:
-                print("[RunPod Handler] ✅ Flask API is ready")
-                break
-        except:
-            if i == 0:
-                print("[RunPod Handler] Waiting for Flask API...")
-            time.sleep(2)
-    else:
-        print("[RunPod Handler] ⚠️  Flask API not responding, starting anyway...")
-    
+
+    # Auto-start Flask API if not running
+    flask_started = False
+    try:
+        resp = requests.get("http://localhost:8000/health", timeout=2)
+        if resp.status_code == 200:
+            print("[RunPod Handler] ✅ Flask API already running")
+        else:
+            raise Exception("Flask not healthy")
+    except:
+        print("[RunPod Handler] 🔄 Flask API not running, starting it...")
+        import subprocess
+        flask_process = subprocess.Popen(
+            ["python3", "flask_tts_api_optimized.py"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        flask_started = True
+
+        # Wait for Flask to be ready
+        for i in range(30):
+            try:
+                resp = requests.get("http://localhost:8000/health", timeout=2)
+                if resp.status_code == 200:
+                    print("[RunPod Handler] ✅ Flask API started successfully")
+                    break
+            except:
+                time.sleep(1)
+        else:
+            print("[RunPod Handler] ❌ Failed to start Flask API")
+            flask_process.terminate()
+            exit(1)
+
     print("[RunPod Handler] Starting RunPod serverless handler...")
-    runpod.serverless.start({"handler": handler})
+    try:
+        runpod.serverless.start({"handler": handler})
+    finally:
+        # Cleanup Flask if we started it
+        if flask_started:
+            print("[RunPod Handler] Cleaning up Flask process...")
+            try:
+                flask_process.terminate()
+                flask_process.wait(timeout=5)
+            except:
+                flask_process.kill()

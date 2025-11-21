@@ -65,7 +65,6 @@ COPY --from=builder /root/.cache/huggingface /root/.cache/huggingface
 # Copy application code
 COPY flask_tts_api_optimized.py /app/
 COPY runpod_handler_simple.py /app/
-COPY entrypoint.sh /app/
 COPY f5_tts/ /app/f5_tts/
 COPY sample/ /app/sample/
 
@@ -73,7 +72,7 @@ COPY sample/ /app/sample/
 RUN mkdir -p /app/output
 
 # Set permissions
-RUN chmod +x /app/*.py /app/entrypoint.sh
+RUN chmod +x /app/*.py
 
 EXPOSE 8000
 
@@ -81,5 +80,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5m --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Start both Flask API and RunPod handler via entrypoint script
-CMD ["/app/entrypoint.sh"]
+# Start RunPod handler (will auto-start Flask API if needed)
+CMD ["python3", "runpod_handler_simple.py"]
