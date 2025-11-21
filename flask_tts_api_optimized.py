@@ -471,7 +471,15 @@ def synthesize():
         wav_path = SAMPLE_DIR / f"{ref_base}.wav"
     
     if not wav_path.exists():
-        return jsonify({"error": "ref_not_found", "message": f"{wav_path} not found"}), 404
+        return jsonify({
+            "error": "ref_not_found",
+            "message": "Reference voice file not found for the given 'ref_name'.",
+            "details": {
+                "original_ref_name": ref_name,
+                "sanitized_base_name": ref_base,
+                "full_path_checked": str(wav_path)
+            }
+        }), 404
     
     # Validate speed
     try:
