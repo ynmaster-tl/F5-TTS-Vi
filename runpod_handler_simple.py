@@ -51,16 +51,36 @@ def handler(event):
         
         # Submit to Flask API
         print("[RunPod Handler] Submitting to Flask API...")
-        response = requests.post(
-            "http://localhost:8000/tts",
-            json={
-                "text": text,
-                "ref_name": ref_name,
-                "speed": speed,
+        
+        # Double-check Flask is still alive before submitting
+        if flask_started and flask_process.poll() is not None:
+            print("[RunPod Handler] ❌ Flask process died before job submission")
+            return {
+                "error": "Flask API process died",
+                "status": "failed",
                 "job_id": job_id
-            },
-            timeout=10
-        )
+            }
+        
+        try:
+            response = requests.post(
+                "http://localhost:8000/tts",
+                json={
+                    "text": text,
+                    "ref_name": ref_name,
+                    "speed": speed,
+                    "job_id": job_id
+                },
+                timeout=10
+            )
+            print(f"[RunPod Handler] Flask response status: {response.status_code}")
+            print(f"[RunPod Handler] Flask response: {response.text[:200]}...")
+        except requests.RequestException as e:
+            print(f"[RunPod Handler] ❌ Request to Flask failed: {e}")
+            return {
+                "error": f"Cannot connect to Flask API: {str(e)}",
+                "status": "failed",
+                "job_id": job_id
+            }
         
         if response.status_code == 503:
             return {
