@@ -138,37 +138,45 @@ def handler(event):
                     print(f"[RunPod Handler] Download URL: {download_url}")
                     print(f"[RunPod Handler] Confirmation URL: {confirmation_url}")
                     
-                    # ========== WAIT FOR DOWNLOAD CONFIRMATION ==========
-                    # This prevents pod from shutting down before Next.js downloads the audio
-                    print(f"[RunPod Handler] ⏳ Waiting for download confirmation...")
-                    confirmation_timeout = int(os.getenv('DOWNLOAD_CONFIRMATION_TIMEOUT', '60'))  # Default 60s
-                    confirmation_start = time.time()
-                    
-                    for i in range(confirmation_timeout):
-                        try:
-                            check_resp = requests.get(
-                                f"http://localhost:8000/check-download/{job_id}",
-                                timeout=2
-                            )
-                            
-                            if check_resp.status_code == 200:
-                                check_data = check_resp.json()
-                                if check_data.get("confirmed"):
-                                    elapsed = time.time() - confirmation_start
-                                    print(f"[RunPod Handler] ✅ Download confirmed after {elapsed:.1f}s!")
-                                    break
-                        except Exception as e:
-                            # Ignore errors during polling
-                            pass
-                        
-                        time.sleep(1)  # Check every second
-                    else:
-                        elapsed = time.time() - confirmation_start
-                        print(f"[RunPod Handler] ⚠️ Download confirmation timeout after {elapsed:.1f}s")
-                        print(f"[RunPod Handler] Proceeding with shutdown anyway (graceful degradation)")
-                    
-                    # Mark job as processed
+                    # Mark job as processed BEFORE waiting
                     processed_jobs.add(job_id)
+                    
+                    # ========== START BACKGROUND THREAD TO WAIT FOR CONFIRMATION ==========
+                    # This keeps pod alive without blocking the return statement
+                    import threading
+                    
+                    def wait_for_confirmation():
+                        """Background thread to wait for download confirmation"""
+                        print(f"[RunPod Handler] 🧵 Background thread: Waiting for download confirmation...")
+                        confirmation_timeout = int(os.getenv('DOWNLOAD_CONFIRMATION_TIMEOUT', '60'))
+                        confirmation_start = time.time()
+                        
+                        for i in range(confirmation_timeout):
+                            try:
+                                check_resp = requests.get(
+                                    f"http://localhost:8000/check-download/{job_id}",
+                                    timeout=2
+                                )
+                                
+                                if check_resp.status_code == 200:
+                                    check_data = check_resp.json()
+                                    if check_data.get("confirmed"):
+                                        elapsed = time.time() - confirmation_start
+                                        print(f"[RunPod Handler] ✅ Download confirmed after {elapsed:.1f}s!")
+                                        return  # Exit thread
+                            except Exception as e:
+                                pass  # Ignore polling errors
+                            
+                            time.sleep(1)
+                        
+                        # Timeout
+                        elapsed = time.time() - confirmation_start
+                        print(f"[RunPod Handler] ⚠️ Confirmation timeout after {elapsed:.1f}s - pod will shutdown")
+                    
+                    # Start background thread (daemon=False to keep pod alive)
+                    confirmation_thread = threading.Thread(target=wait_for_confirmation, daemon=False)
+                    confirmation_thread.start()
+                    print(f"[RunPod Handler] 📤 Returning result immediately (background thread will wait for confirmation)")
                     
                     # Cleanup progress file
                     try:
