@@ -102,10 +102,12 @@
 Để giải quyết vấn đề **worker RunPod tắt sớm trước khi client tải xuống âm thanh** (do timeout idle 10 giây), hệ thống triển khai cơ chế **xác nhận tải xuống qua webhook**:
 
 #### Cách hoạt động
-1. **Handler chờ xác nhận**: Sau khi TTS hoàn thành, handler không trả về ngay lập tức mà chờ xác nhận từ client trong tối đa **60 giây**.
-2. **Client tải xuống**: Client nhận `download_url` từ polling và tải âm thanh về.
-3. **Client xác nhận**: Sau khi tải thành công, client gửi POST request đến `confirmation_url`.
-4. **Handler kết thúc**: Handler nhận xác nhận → trả về response → worker tắt an toàn.
+1. **Handler trả về ngay**: Sau khi TTS hoàn thành, handler **return response ngay lập tức** (không blocking).
+2. **Background thread chờ**: Handler khởi động **background thread** (non-daemon) để chờ confirmation, giữ pod sống.
+3. **Client nhận COMPLETED**: Scheduler nhận status=COMPLETED từ RunPod ngay lập tức (không bị deadlock).
+4. **Client tải xuống**: Client download audio từ `download_url` (2-5 giây).
+5. **Client xác nhận**: Sau khi tải thành công, client gửi POST request đến `confirmation_url`.
+6. **Thread nhận confirmation**: Background thread detect confirmation → exit → pod tắt an toàn.
 
 #### Endpoints xác nhận
 - **POST `/confirm-download/<job_id>`**: Client gọi để xác nhận đã tải xuống thành công.
@@ -120,30 +122,39 @@
   # Response: {"confirmed": true, "timestamp": "2024-01-20T10:30:45.123456"}
   ```
 
-#### Ví dụ luồng đầy đủ
+#### Ví dụ luồng đầy đủ (Background Thread Pattern)
 ```python
 # 1. Handler hoàn thành TTS
-result = {"download_url": "http://api/output/audio.wav"}
+result = {
+    "download_url": "http://api/output/audio.wav",
+    "confirmation_url": f"{flask_api_url}/confirm-download/{job_id}"
+}
 
-# 2. Handler sinh confirmation_url
-confirmation_url = f"{flask_api_url}/confirm-download/{job_id}"
-result["confirmation_url"] = confirmation_url
+# 2. Start background thread để chờ confirmation (non-blocking)
+import threading
 
-# 3. Handler chờ xác nhận (60 giây)
-for i in range(60):
-    resp = requests.get(f"{flask_api_url}/check-download/{job_id}")
-    if resp.json().get("confirmed"):
-        print("✓ Client confirmed download")
-        break
-    time.sleep(1)
+def wait_for_confirmation():
+    for i in range(60):  # Max 60 giây
+        resp = requests.get(f"{flask_api_url}/check-download/{job_id}")
+        if resp.json().get("confirmed"):
+            print("✓ Client confirmed download")
+            return  # Exit thread → pod tắt
+        time.sleep(1)
+    print("⚠ Timeout - no confirmation received")
 
-# 4. Handler trả về kết quả
-return result
+# Start thread (daemon=False để giữ pod sống)
+threading.Thread(target=wait_for_confirmation, daemon=False).start()
+
+# 3. Return NGAY LẬP TỨC (không chờ)
+return result  # RunPod status = COMPLETED ngay
 ```
 
-#### Backward Compatibility
-- Client cũ không gửi confirmation → handler timeout sau 60s → vẫn trả về kết quả bình thường (không lỗi).
-- Client mới gửi confirmation → handler trả về ngay lập tức → tiết kiệm thời gian chờ.
+#### Lợi ích của Background Thread
+- ✅ **Không deadlock**: Handler return ngay → Scheduler nhận COMPLETED ngay (không chờ 60s).
+- ✅ **Pod vẫn sống**: Non-daemon thread giữ pod sống cho đến khi nhận confirmation.
+- ✅ **Nhanh chóng**: Client download ngay khi thấy COMPLETED (thay vì chờ handler timeout).
+- ✅ **Tiết kiệm**: Pod tắt ngay sau confirmation (không chờ hết 60s nếu client confirm sớm).
+- ✅ **Backward compatible**: Client cũ không gửi confirmation → thread timeout 60s → pod vẫn tắt bình thường.
 
 ### Tính năng Serverless
 - Khởi động lạnh: 30-60 giây cho lần yêu cầu đầu tiên.
@@ -726,17 +737,32 @@ const audioBuffer = Buffer.from(output.audio_base64, 'base64');
 
 ## 🎯 Production Best Practices
 
-### RunPod Configuration
+### RunPod Configuration with Webhook
 
-**Idle Timeout:** Set to **10 seconds**
-- Keeps worker alive long enough for Next.js to download audio
-- Worker terminates ~5-10s after returning COMPLETED status
-- Must download within this window or get 404
+**Architecture:**
+- RunPod handler sends **webhook notification** to Next.js when job completes
+- Next.js downloads audio **immediately** upon receiving webhook
+- Handler waits for **download confirmation** before returning COMPLETED
+- Pod stays alive until confirmation received (max 90s)
 
-**Polling Interval:** Next.js polls every **1 second**
-- RunPod allows 2000 req/10s for `/status` endpoint
-- Fast polling ensures catching COMPLETED before worker terminates
-- Timeout set to 15s for download to prevent hanging
+**Why Webhook?**
+- ✅ **Instant notification**: No polling delay
+- ✅ **Guaranteed download**: Pod waits for confirmation
+- ✅ **No race condition**: Download happens before pod shutdown
+- ✅ **Reduced API calls**: No need to poll RunPod status API frequently
+
+**Flow:**
+1. Handler completes TTS → sends webhook to Next.js
+2. Next.js receives webhook → downloads audio immediately
+3. Next.js saves file → sends confirmation to handler
+4. Handler receives confirmation → returns COMPLETED
+5. RunPod removes job → pod shutdown
+
+**Configuration:**
+- **Idle Timeout:** 10 seconds (default)
+- **Webhook URL:** Set `NEXTJS_WEBHOOK_URL` env var in RunPod
+- **Confirmation Timeout:** 60 seconds (handler waits max 60s)
+- **Webhook Endpoint:** `POST /api/runpod-webhook` in Next.js
 
 **Max Concurrent Jobs:** Configure in Admin UI (default: 4)
 - Limits total active jobs (waiting + processing)

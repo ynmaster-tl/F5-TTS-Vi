@@ -134,49 +134,12 @@ def handler(event):
                         download_url = f"http://localhost:8000/output/{filename}"
                         confirmation_url = f"http://localhost:8000/confirm-download/{job_id}"
                     
-                    print(f"[RunPod Handler] ✅ Completed in {time.time() - start_time:.2f}s")
+                    print(f"[RunPod Handler] ✅ TTS completed in {time.time() - start_time:.2f}s")
                     print(f"[RunPod Handler] Download URL: {download_url}")
                     print(f"[RunPod Handler] Confirmation URL: {confirmation_url}")
                     
-                    # Mark job as processed BEFORE waiting
+                    # Mark job as processed
                     processed_jobs.add(job_id)
-                    
-                    # ========== START BACKGROUND THREAD TO WAIT FOR CONFIRMATION ==========
-                    # This keeps pod alive without blocking the return statement
-                    import threading
-                    
-                    def wait_for_confirmation():
-                        """Background thread to wait for download confirmation"""
-                        print(f"[RunPod Handler] 🧵 Background thread: Waiting for download confirmation...")
-                        confirmation_timeout = int(os.getenv('DOWNLOAD_CONFIRMATION_TIMEOUT', '60'))
-                        confirmation_start = time.time()
-                        
-                        for i in range(confirmation_timeout):
-                            try:
-                                check_resp = requests.get(
-                                    f"http://localhost:8000/check-download/{job_id}",
-                                    timeout=2
-                                )
-                                
-                                if check_resp.status_code == 200:
-                                    check_data = check_resp.json()
-                                    if check_data.get("confirmed"):
-                                        elapsed = time.time() - confirmation_start
-                                        print(f"[RunPod Handler] ✅ Download confirmed after {elapsed:.1f}s!")
-                                        return  # Exit thread
-                            except Exception as e:
-                                pass  # Ignore polling errors
-                            
-                            time.sleep(1)
-                        
-                        # Timeout
-                        elapsed = time.time() - confirmation_start
-                        print(f"[RunPod Handler] ⚠️ Confirmation timeout after {elapsed:.1f}s - pod will shutdown")
-                    
-                    # Start background thread (daemon=False to keep pod alive)
-                    confirmation_thread = threading.Thread(target=wait_for_confirmation, daemon=False)
-                    confirmation_thread.start()
-                    print(f"[RunPod Handler] 📤 Returning result immediately (background thread will wait for confirmation)")
                     
                     # Cleanup progress file
                     try:
@@ -184,14 +147,68 @@ def handler(event):
                     except:
                         pass
                     
-                    # Return result - MUST be flat dict at top level
-                    # Return download URL instead of base64 to avoid 400 Bad Request
+                    # ========== SEND WEBHOOK TO NEXT.JS ==========
+                    webhook_url = os.getenv('NEXTJS_WEBHOOK_URL')
+                    if webhook_url:
+                        print(f"[RunPod Handler] 📤 Sending webhook to Next.js: {webhook_url}")
+                        try:
+                            webhook_resp = requests.post(
+                                webhook_url,
+                                json={
+                                    "job_id": job_id,
+                                    "download_url": download_url,
+                                    "confirmation_url": confirmation_url,
+                                    "filename": filename,
+                                },
+                                timeout=5
+                            )
+                            if webhook_resp.status_code == 200:
+                                print(f"[RunPod Handler] ✅ Webhook sent successfully")
+                            else:
+                                print(f"[RunPod Handler] ⚠️ Webhook returned {webhook_resp.status_code}")
+                        except Exception as webhook_err:
+                            print(f"[RunPod Handler] ⚠️ Webhook failed: {webhook_err}")
+                    else:
+                        print(f"[RunPod Handler] ⚠️ NEXTJS_WEBHOOK_URL not set, skipping webhook")
+                    
+                    # ========== WAIT FOR DOWNLOAD CONFIRMATION ==========
+                    # Handler MUST wait for confirmation to keep pod alive
+                    print(f"[RunPod Handler] ⏳ Waiting for download confirmation (max 60s)...")
+                    confirmation_timeout = int(os.getenv('DOWNLOAD_CONFIRMATION_TIMEOUT', '60'))
+                    confirmation_start = time.time()
+                    confirmed = False
+                    
+                    for i in range(confirmation_timeout):
+                        try:
+                            check_resp = requests.get(
+                                f"http://localhost:8000/check-download/{job_id}",
+                                timeout=2
+                            )
+                            
+                            if check_resp.status_code == 200:
+                                check_data = check_resp.json()
+                                if check_data.get("confirmed"):
+                                    elapsed = time.time() - confirmation_start
+                                    print(f"[RunPod Handler] ✅ Download confirmed after {elapsed:.1f}s!")
+                                    confirmed = True
+                                    break
+                        except Exception as e:
+                            pass  # Ignore polling errors
+                        
+                        time.sleep(1)
+                    
+                    if not confirmed:
+                        elapsed = time.time() - confirmation_start
+                        print(f"[RunPod Handler] ⚠️ No confirmation after {elapsed:.1f}s - returning anyway")
+                    
+                    # Return result - job will be removed from RunPod queue
                     return {
                         "download_url": download_url,
-                        "confirmation_url": confirmation_url,  # NEW: For Next.js to confirm download
+                        "confirmation_url": confirmation_url,
                         "filename": filename,
                         "job_id": job_id,
                         "status": "completed",
+                        "confirmed": confirmed,
                         "sample_used": ref_name,
                         "processing_time_seconds": round(time.time() - start_time, 2)
                     }
