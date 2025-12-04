@@ -639,8 +639,16 @@ def kill_job(job_id):
 
 @app.route("/output/<path:filename>")
 def download_output(filename):
-    """Download output file"""
-    return send_from_directory(str(OUTPUT_DIR), filename, as_attachment=False)
+    """Download output file with URL decoding support"""
+    from urllib.parse import unquote
+    
+    # Decode URL-encoded filename (e.g., "Ch%C6%B0%C6%A1ng" -> "Chương")
+    decoded_filename = unquote(filename)
+    
+    print(f"[Download] Original filename: {filename}")
+    print(f"[Download] Decoded filename: {decoded_filename}")
+    
+    return send_from_directory(str(OUTPUT_DIR), decoded_filename, as_attachment=False)
 
 
 @app.route("/confirm-download/<job_id>", methods=["POST"])
