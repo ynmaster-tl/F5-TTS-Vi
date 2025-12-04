@@ -149,8 +149,21 @@ def handler(event):
                     
                     # ========== SEND WEBHOOK TO NEXT.JS ==========
                     webhook_url = os.getenv('NEXTJS_WEBHOOK_URL')
+                    webhook_api_key = os.getenv('RUNPOD_WEBHOOK_API_KEY')
+                    
                     if webhook_url:
                         print(f"[RunPod Handler] 📤 Sending webhook to Next.js: {webhook_url}")
+                        
+                        # Prepare headers with API key authentication
+                        webhook_headers = {
+                            'Content-Type': 'application/json'
+                        }
+                        if webhook_api_key:
+                            webhook_headers['X-API-Key'] = webhook_api_key
+                            print(f"[RunPod Handler] 🔐 Using API key authentication")
+                        else:
+                            print(f"[RunPod Handler] ⚠️ RUNPOD_WEBHOOK_API_KEY not set, sending without auth")
+                        
                         try:
                             webhook_resp = requests.post(
                                 webhook_url,
@@ -160,10 +173,13 @@ def handler(event):
                                     "confirmation_url": confirmation_url,
                                     "filename": filename,
                                 },
-                                timeout=5
+                                headers=webhook_headers,
+                                timeout=10
                             )
                             if webhook_resp.status_code == 200:
                                 print(f"[RunPod Handler] ✅ Webhook sent successfully")
+                            elif webhook_resp.status_code == 401:
+                                print(f"[RunPod Handler] 🚫 Webhook authentication failed - check API key")
                             else:
                                 print(f"[RunPod Handler] ⚠️ Webhook returned {webhook_resp.status_code}")
                         except Exception as webhook_err:
