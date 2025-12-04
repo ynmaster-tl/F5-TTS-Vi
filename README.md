@@ -47,11 +47,14 @@
   - `/tts/kill/<job_id>`: Hủy công việc đang chạy.
   - `/output/<filename>`: Tải file âm thanh đã tạo.
   - `/cleanup`: Dọn dẹp bộ nhớ GPU thủ công.
+  - `/confirm-download/<job_id>`: Xác nhận client đã tải xuống âm thanh (POST).
+  - `/check-download/<job_id>`: Kiểm tra trạng thái xác nhận tải xuống (GET).
 
 ### 2. Bộ xử lý RunPod (`runpod_handler_simple.py`)
 - **Điều phối Công việc**: Nhận yêu cầu từ RunPod và chuyển tiếp đến Flask API.
 - **Theo dõi Tiến độ**: Polling Flask API để cập nhật trạng thái công việc.
 - **Trả về Kết quả**: Trả về URL tải xuống âm thanh khi hoàn thành.
+- **Xác nhận Tải xuống**: Chờ client xác nhận đã tải xuống âm thanh trước khi tắt worker (tối đa 60 giây).
 - **Xử lý Lỗi**: Quản lý các trường hợp lỗi và timeout.
 
 ### 3. Mô hình F5-TTS (`f5_tts/api.py`)
@@ -77,9 +80,15 @@
 2. **RunPod** tạo worker và gọi handler với dữ liệu công việc.
 3. **Handler** polling Flask API để theo dõi tiến độ mỗi 2 giây.
 4. **Flask API** xử lý TTS (có thể mất 200-400 giây cho văn bản dài).
-5. **Handler** trả về `download_url` khi hoàn thành.
-6. **Client** polling `/status` của RunPod mỗi 1 giây.
-7. **Client** tải âm thanh trước khi worker tắt (timeout idle 10 giây).
+5. **Handler** nhận kết quả và sinh `confirmation_url` (URL webhook xác nhận).
+6. **Handler** chờ xác nhận tải xuống từ client (polling mỗi 1 giây, tối đa 60 giây).
+7. **Handler** trả về `download_url` và `confirmation_url` khi hoàn thành.
+8. **Client** polling `/status` của RunPod mỗi 1 giây.
+9. **Client** tải âm thanh xuống thành công.
+10. **Client** gửi webhook POST đến `confirmation_url` để xác nhận.
+11. **Handler** nhận xác nhận và kết thúc → **Worker tắt an toàn**.
+
+**Lưu ý:** Nếu client không gửi xác nhận trong 60 giây, handler sẽ timeout và trả về cảnh báo, nhưng vẫn hoàn thành công việc. Timeout idle 10 giây của RunPod **không còn là vấn đề** nhờ cơ chế chờ xác nhận.
 
 ### Quy trình Tạo TTS
 1. **Xác thực đầu vào**: Kiểm tra văn bản và file giọng nói tham chiếu.
@@ -89,11 +98,59 @@
 5. **Vocoder**: Chuyển spectrograms thành sóng âm thanh.
 6. **Hậu xử lý**: Dọn dẹp âm thanh và lưu file.
 
+### Webhook Confirmation (Tính năng Mới)
+Để giải quyết vấn đề **worker RunPod tắt sớm trước khi client tải xuống âm thanh** (do timeout idle 10 giây), hệ thống triển khai cơ chế **xác nhận tải xuống qua webhook**:
+
+#### Cách hoạt động
+1. **Handler chờ xác nhận**: Sau khi TTS hoàn thành, handler không trả về ngay lập tức mà chờ xác nhận từ client trong tối đa **60 giây**.
+2. **Client tải xuống**: Client nhận `download_url` từ polling và tải âm thanh về.
+3. **Client xác nhận**: Sau khi tải thành công, client gửi POST request đến `confirmation_url`.
+4. **Handler kết thúc**: Handler nhận xác nhận → trả về response → worker tắt an toàn.
+
+#### Endpoints xác nhận
+- **POST `/confirm-download/<job_id>`**: Client gọi để xác nhận đã tải xuống thành công.
+  ```bash
+  curl -X POST http://localhost:8000/confirm-download/test_job_001
+  # Response: {"confirmed": true, "job_id": "test_job_001"}
+  ```
+
+- **GET `/check-download/<job_id>`**: Handler polling để kiểm tra trạng thái xác nhận.
+  ```bash
+  curl http://localhost:8000/check-download/test_job_001
+  # Response: {"confirmed": true, "timestamp": "2024-01-20T10:30:45.123456"}
+  ```
+
+#### Ví dụ luồng đầy đủ
+```python
+# 1. Handler hoàn thành TTS
+result = {"download_url": "http://api/output/audio.wav"}
+
+# 2. Handler sinh confirmation_url
+confirmation_url = f"{flask_api_url}/confirm-download/{job_id}"
+result["confirmation_url"] = confirmation_url
+
+# 3. Handler chờ xác nhận (60 giây)
+for i in range(60):
+    resp = requests.get(f"{flask_api_url}/check-download/{job_id}")
+    if resp.json().get("confirmed"):
+        print("✓ Client confirmed download")
+        break
+    time.sleep(1)
+
+# 4. Handler trả về kết quả
+return result
+```
+
+#### Backward Compatibility
+- Client cũ không gửi confirmation → handler timeout sau 60s → vẫn trả về kết quả bình thường (không lỗi).
+- Client mới gửi confirmation → handler trả về ngay lập tức → tiết kiệm thời gian chờ.
+
 ### Tính năng Serverless
 - Khởi động lạnh: 30-60 giây cho lần yêu cầu đầu tiên.
 - Xử lý ấm: 3-5 giây cho các yêu cầu tiếp theo.
 - Bộ nhớ GPU: ~10GB VRAM sử dụng.
 - Công việc đồng thời: 1 công việc mỗi worker (giới hạn GPU).
+- **Timeout xác nhận**: 60 giây (handler chờ client xác nhận tải xuống).
 
 ## 🔧 Cài đặt và Triển khai
 
@@ -183,6 +240,26 @@ curl http://localhost:8000/tts/progress/test_job_001
 
 # Tải âm thanh khi hoàn thành
 curl -O http://localhost:8000/output/f5tts_20251121_120000_abc123.wav
+
+# Xác nhận tải xuống thành công (để handler kết thúc sớm)
+curl -X POST http://localhost:8000/confirm-download/test_job_001
+```
+
+### Kiểm tra Webhook Confirmation
+```bash
+# Chạy script test đầy đủ luồng webhook
+cd /home/dtlong/F5-TTS-Vi-Runpod
+python test_confirmation_flow.py
+
+# Kết quả mong đợi:
+# ✓ Health check: OK
+# ✓ Status check: Available
+# ✓ Voices check: 3 samples
+# ✓ TTS submission: Job submitted
+# ✓ TTS completion: Job completed
+# ✓ Confirmation before: confirmed=False
+# ✓ Download confirmation: Confirmed
+# ✓ Confirmation after: confirmed=True
 ```
 
 ### Sử dụng với RunPod
@@ -236,6 +313,8 @@ curl https://api.runpod.ai/v2/YOUR_ENDPOINT_ID/status/JOB_ID \
   "output": {
     "audio_base64": "base64_encoded_wav_data",
     "filename": "output.wav",
+    "download_url": "http://api/output/audio.wav",
+    "confirmation_url": "http://api/confirm-download/job-id",
     "sample_used": "main.wav",
     "processing_time_seconds": 3.5,
     "job_id": "job-id"
@@ -243,11 +322,25 @@ curl https://api.runpod.ai/v2/YOUR_ENDPOINT_ID/status/JOB_ID \
 }
 ```
 
+**Output Fields:**
+- `audio_base64` (optional): Base64-encoded WAV audio data (for small files)
+- `filename`: Generated audio filename
+- `download_url`: URL to download audio file
+- `confirmation_url` (**NEW**): Webhook URL for client to confirm download completion
+- `sample_used`: Voice sample used for synthesis
+- `processing_time_seconds`: Total processing time
+- `job_id`: Unique job identifier
+
 **Status Values:**
 - `IN_QUEUE` - Waiting for worker
 - `IN_PROGRESS` - Processing
 - `COMPLETED` - Success
 - `FAILED` - Error occurred
+
+**Lưu ý về Confirmation URL:**
+- Client **nên** gọi `confirmation_url` sau khi tải xuống thành công để handler biết và kết thúc sớm.
+- Nếu không gọi, handler sẽ timeout sau 60 giây và vẫn hoàn thành (không lỗi).
+- Format: `POST {confirmation_url}` (không cần body)
 
 ---
 
@@ -698,10 +791,41 @@ curl -f http://localhost:8000/health || exit 1
 
 ## 🐛 Known Issues & Solutions
 
+### Issue: Worker tắt sớm trước khi client tải xuống (404 Error)
+
+**Cause:** RunPod idle timeout 10s → worker tắt trước khi Next.js tải audio  
+**Solution:** ✅ **Webhook confirmation mechanism** (implemented)
+- Handler chờ client xác nhận tải xuống (tối đa 60s)
+- Client gửi POST đến `confirmation_url` sau khi tải xong
+- Worker chỉ tắt sau khi nhận confirmation hoặc timeout 60s
+
+**Testing:**
+```bash
+python test_confirmation_flow.py
+# Expected: All 7 tests pass, handler waits for confirmation
+```
+
 ### Issue: "400 Bad Request" when returning job results
 
 **Cause:** Response too large (base64 audio > 10MB)  
 **Solution:** Switched to `download_url` instead of `audio_base64`
+
+### Issue: Confirmation timeout (handler chờ 60s mà không có response)
+
+**Cause:** Client không gọi `confirmation_url` (old client hoặc network issue)  
+**Solution:** Backward compatible - handler timeout gracefully sau 60s và vẫn trả về success
+- Không throw error
+- Log warning: "Download confirmation not received, proceeding anyway"
+- Client có thể retry nếu cần
+
+**Debugging:**
+```bash
+# Kiểm tra trạng thái confirmation
+curl http://localhost:8000/check-download/YOUR_JOB_ID
+
+# Nếu confirmed=false sau khi tải xong → gọi lại confirm
+curl -X POST http://localhost:8000/confirm-download/YOUR_JOB_ID
+```
 
 ### Issue: One job triggers multiple workers
 

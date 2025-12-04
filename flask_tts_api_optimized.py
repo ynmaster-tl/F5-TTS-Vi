@@ -49,6 +49,10 @@ current_job_id = None
 job_start_time = None
 cancelled_jobs = set()  # Track cancelled job IDs
 
+# ========== DOWNLOAD CONFIRMATION ==========
+# Track which jobs have been downloaded successfully by Next.js
+download_confirmed = {}  # {job_id: True/False}
+
 
 # ========== PROGRESS TRACKING ==========
 def update_progress(job_id, progress, status=None, extra=None, batch_current=None, batch_total=None, filename=None):
@@ -637,6 +641,41 @@ def kill_job(job_id):
 def download_output(filename):
     """Download output file"""
     return send_from_directory(str(OUTPUT_DIR), filename, as_attachment=False)
+
+
+@app.route("/confirm-download/<job_id>", methods=["POST"])
+def confirm_download(job_id):
+    """
+    Confirmation endpoint - Next.js calls this after successful download
+    This allows RunPod handler to know download completed before shutdown
+    """
+    try:
+        download_confirmed[job_id] = True
+        print(f"[Confirmation] ✅ Download confirmed for job {job_id}")
+        
+        return jsonify({
+            "status": "confirmed",
+            "job_id": job_id,
+            "timestamp": time.time()
+        }), 200
+    except Exception as e:
+        print(f"[Confirmation] ❌ Error confirming download for {job_id}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/check-download/<job_id>", methods=["GET"])
+def check_download(job_id):
+    """
+    Check if download has been confirmed by Next.js
+    RunPod handler polls this endpoint before shutdown
+    """
+    confirmed = download_confirmed.get(job_id, False)
+    
+    return jsonify({
+        "confirmed": confirmed,
+        "job_id": job_id,
+        "timestamp": time.time()
+    }), 200
 
 
 @app.route("/cleanup", methods=["POST"])
