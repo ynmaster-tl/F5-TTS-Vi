@@ -641,6 +641,7 @@ def kill_job(job_id):
 def download_output(filename):
     """Download output file with URL decoding support"""
     from urllib.parse import unquote
+    import os
     
     # Decode URL-encoded filename (e.g., "Ch%C6%B0%C6%A1ng" -> "Chương")
     decoded_filename = unquote(filename)
@@ -648,7 +649,35 @@ def download_output(filename):
     print(f"[Download] Original filename: {filename}")
     print(f"[Download] Decoded filename: {decoded_filename}")
     
+    # Check if file exists
+    file_path = os.path.join(str(OUTPUT_DIR), decoded_filename)
+    if os.path.exists(file_path):
+        print(f"[Download] ✅ File found: {file_path}")
+        print(f"[Download] File size: {os.path.getsize(file_path)} bytes")
+    else:
+        print(f"[Download] ❌ File NOT found: {file_path}")
+        # List all files in output dir for debugging
+        try:
+            all_files = os.listdir(str(OUTPUT_DIR))
+            print(f"[Download] Available files in {OUTPUT_DIR}:")
+            for f in all_files:
+                print(f"  - {f}")
+        except Exception as e:
+            print(f"[Download] Error listing files: {e}")
+        return jsonify({"error": "File not found", "path": file_path}), 404
+    
     return send_from_directory(str(OUTPUT_DIR), decoded_filename, as_attachment=False)
+
+
+@app.route("/list-files")
+def list_files():
+    """Debug endpoint - list all files in output directory"""
+    import os
+    try:
+        files = os.listdir(str(OUTPUT_DIR))
+        return jsonify({"files": files, "count": len(files), "dir": str(OUTPUT_DIR)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/confirm-download/<job_id>", methods=["POST"])
