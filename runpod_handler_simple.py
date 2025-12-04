@@ -174,7 +174,7 @@ def handler(event):
                                     "filename": filename,
                                 },
                                 headers=webhook_headers,
-                                timeout=30
+                                timeout=60
                             )
                             if webhook_resp.status_code == 200:
                                 print(f"[RunPod Handler] ✅ Webhook sent successfully")
