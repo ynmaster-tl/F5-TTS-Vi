@@ -104,13 +104,16 @@ fix_duration = None
 def chunk_text(text: str, max_chars: int = 370, min_chars: int = 40):
     """
     Chia nhỏ văn bản dựa trên dấu câu, ưu tiên ngắt thành từng câu riêng biệt.
-    Chỉ ghép câu ngắn (dưới min_chars) với câu tiếp theo nếu kết quả ghép không vượt max_chars.
+    Tối ưu cho văn bản có nhiều dấu phẩy - tách sớm hơn để tránh chunk quá dài.
     
     Tham số:
     - text (str): Văn bản đầu vào.
-    - max_chars (int): Chiều dài ký tự tối đa cho mỗi đoạn.
+    - max_chars (int): Chiều dài ký tự tối đa cho mỗi đoạn (hard limit).
     - min_chars (int): Chiều dài ký tự tối thiểu cho một đoạn trước khi cố gắng ghép.
     """
+    
+    # Target length tối ưu: 60% của max_chars (tránh chunk quá dài)
+    target_chars = int(max_chars * 0.6)  # ~220 chars nếu max=370
     
     # Bước 1: Tách văn bản thành các câu/mệnh đề dựa trên dấu câu mạnh.
     # [.] [?] [!] [:] [\n] là ranh giới câu.
@@ -144,34 +147,81 @@ def chunk_text(text: str, max_chars: int = 370, min_chars: int = 40):
     if not full_sentences:
         return []
 
-    # --- Bước 2: Ghép các câu nhỏ và Tách các câu quá dài ---
+    # --- Bước 2: Xử lý câu dài có nhiều dấu phẩy ---
+    def split_by_commas(sentence: str, target_len: int, max_len: int):
+        """Tách câu dài theo dấu phẩy thành các phần ngắn hơn"""
+        # Nếu câu ngắn hơn target, return luôn
+        if len(sentence) <= target_len:
+            return [sentence]
+        
+        # Tách theo dấu phẩy
+        parts = re.split(r'([,;])', sentence)
+        chunks = []
+        current_chunk = ""
+        
+        for part in parts:
+            if not part.strip():
+                continue
+            
+            # Nếu là dấu phẩy/chấm phẩy
+            if re.match(r'[,;]', part):
+                current_chunk += part
+                # Kiểm tra xem đã đủ dài chưa
+                if len(current_chunk) >= target_len:
+                    chunks.append(current_chunk.strip())
+                    current_chunk = ""
+            else:
+                # Nếu thêm part này vào sẽ vượt max_len
+                if current_chunk and len(current_chunk + " " + part) > max_len:
+                    # Lưu chunk hiện tại
+                    chunks.append(current_chunk.strip())
+                    current_chunk = part
+                else:
+                    # Thêm vào chunk hiện tại
+                    if current_chunk and not current_chunk.endswith(tuple(',; ')):
+                        current_chunk += " "
+                    current_chunk += part
+        
+        # Thêm phần còn lại
+        if current_chunk.strip():
+            chunks.append(current_chunk.strip())
+        
+        return chunks if chunks else [sentence]
+
+    # --- Bước 3: Xử lý từng câu ---
     final_chunks = []
     i = 0
     while i < len(full_sentences):
         sentence = full_sentences[i]
         
-        # 1. Xử lý câu quá dài (> max_chars)
-        if len(sentence) > max_chars:
+        # 1. Xử lý câu quá dài (> target_chars)
+        if len(sentence) > target_chars:
+            # Thử tách theo dấu phẩy trước
+            sub_chunks = split_by_commas(sentence, target_chars, max_chars)
             
-            # Cắt câu quá dài thành nhiều đoạn, ưu tiên ngắt nghỉ tại dấu câu yếu (nếu có)
-            start = 0
-            while start < len(sentence):
-                segment = sentence[start:start + max_chars]
-                split_point = len(segment) 
-                
-                # Tìm điểm ngắt tốt nhất trong 70 ký tự cuối
-                for j in range(len(segment) - 1, max(0, len(segment) - 70), -1):
-                    char = segment[j]
-                    if char in [',', ';']: # Ưu tiên phẩy, chấm phẩy
-                        split_point = j + 1
-                        break
-                    # Sau đó là khoảng trắng
-                    elif char.isspace() and (len(segment) - j) < 50: 
-                        split_point = j + 1
-                        break
-                    
-                final_chunks.append(segment[:split_point].strip())
-                start += split_point
+            # Nếu vẫn có chunk quá dài sau khi tách phẩy, cắt cứng
+            for sub_chunk in sub_chunks:
+                if len(sub_chunk) > max_chars:
+                    # Cắt cứng thành các đoạn nhỏ hơn
+                    start = 0
+                    while start < len(sub_chunk):
+                        segment = sub_chunk[start:start + max_chars]
+                        split_point = len(segment)
+                        
+                        # Tìm điểm ngắt tốt nhất trong 100 ký tự cuối
+                        for j in range(len(segment) - 1, max(0, len(segment) - 100), -1):
+                            char = segment[j]
+                            if char in [',', ';']:
+                                split_point = j + 1
+                                break
+                            elif char.isspace() and (len(segment) - j) < 70:
+                                split_point = j + 1
+                                break
+                        
+                        final_chunks.append(segment[:split_point].strip())
+                        start += split_point
+                else:
+                    final_chunks.append(sub_chunk)
             i += 1
             
         # 2. Xử lý câu ngắn (< min_chars) và cố gắng ghép
@@ -179,17 +229,17 @@ def chunk_text(text: str, max_chars: int = 370, min_chars: int = 40):
             next_sentence = full_sentences[i+1]
             merged_sentence = sentence + " " + next_sentence
             
-            # Nếu ghép không vượt quá max_chars
-            if len(merged_sentence) <= max_chars:
-                # Thực hiện ghép và tiếp tục kiểm tra câu ghép này ở vòng lặp sau
+            # Nếu ghép không vượt quá target_chars (ưu tiên target thay vì max)
+            if len(merged_sentence) <= target_chars:
+                # Thực hiện ghép
                 full_sentences[i+1] = merged_sentence
                 i += 1 
             else:
-                # Nếu ghép vượt quá max_chars, không ghép (giữ nguyên câu ngắn)
+                # Không ghép được, giữ nguyên câu ngắn
                 final_chunks.append(sentence)
                 i += 1
             
-        # 3. Câu có độ dài hợp lệ hoặc câu cuối cùng
+        # 3. Câu có độ dài hợp lệ
         else:
             final_chunks.append(sentence)
             i += 1
