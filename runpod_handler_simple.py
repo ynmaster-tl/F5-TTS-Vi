@@ -147,6 +147,10 @@ def handler(event):
                     except:
                         pass
                     
+                    # Wait 5 seconds before sending webhook to ensure file is fully uploaded
+                    print(f"[RunPod Handler] ⏳ Waiting 5s before sending webhook...")
+                    time.sleep(5)
+                    
                     # ========== SEND WEBHOOK TO NEXT.JS ==========
                     webhook_url = os.getenv('NEXTJS_WEBHOOK_URL')
                     webhook_api_key = os.getenv('RUNPOD_WEBHOOK_API_KEY')
